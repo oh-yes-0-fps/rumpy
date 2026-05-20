@@ -1,0 +1,25 @@
+[package]
+name = "rumpy"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["Bowan Foryt <bowan@valstad.com>"]
+
+[features]
+default = []
+safe-locks = ["rustpython-vm/threading"]
+
+[dependencies]
+ndarray = "0.17.2"
+rustpython-vm = { version = "0.5.0", default-features = false, features = ["compiler"] }
+num-traits = "0.2"
+num-complex = "0.4"
+half = { version = "2", features = ["num-traits"] }
+rustfft = "6"
+no-panic = "0.1.36"
+
+[dev-dependencies]
+pyo3 = { version = "0.28", features = ["auto-initialize"] }
+numpy = "0.28"
+approx = "0.5"
+rustpython-vm = { version = "0.5.0", default-features = false, features = ["compiler", "stdio"] }
