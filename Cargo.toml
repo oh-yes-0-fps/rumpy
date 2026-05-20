@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Bowan Foryt <bowan@valstad.com>"]
+repository = "https://github.com/oh-yes-0-fps/rumpy"
+description = "A reimplementation of NumPy for use with rustpython in embedded interpreters"
 
 [features]
 default = []
