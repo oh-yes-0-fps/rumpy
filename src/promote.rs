@@ -13,11 +13,25 @@
 use crate::dtype::DType;
 
 /// `numpy.result_type(a, b)`.
-#[no_panic::no_panic]
+#[cfg_attr(feature = "no-panic", no_panic::no_panic)]
 #[inline]
 pub fn promote(a: DType, b: DType) -> DType {
     if a == b {
         return a;
+    }
+
+    // String / bytes: same-kind widens to the wider operand. Mixing kinds
+    // (or string with anything numeric) falls through to Object, matching
+    // numpy's "common dtype" behaviour for incompatible flavours.
+    match (a, b) {
+        (DType::Str(x), DType::Str(y)) => return DType::Str(x.max(y)),
+        (DType::Bytes(x), DType::Bytes(y)) => return DType::Bytes(x.max(y)),
+        _ => {}
+    }
+    if matches!(a, DType::Str(_) | DType::Bytes(_) | DType::Object)
+        || matches!(b, DType::Str(_) | DType::Bytes(_) | DType::Object)
+    {
+        return DType::Object;
     }
 
     // Complex: pick the float width that covers both real parts, then a
@@ -84,7 +98,7 @@ pub fn promote_many(types: &[DType]) -> DType {
 /// any other integer. Non-integer dtypes return (false, 0) as a defensive
 /// fallback — `promote` only routes integers here, so this arm is logically
 /// dead, but we don't want a panic in case of a future bug.
-#[no_panic::no_panic]
+#[cfg_attr(feature = "no-panic", no_panic::no_panic)]
 #[inline]
 fn int_class(d: DType) -> (bool, u32) {
     match d {
@@ -101,7 +115,7 @@ fn int_class(d: DType) -> (bool, u32) {
     }
 }
 
-#[no_panic::no_panic]
+#[cfg_attr(feature = "no-panic", no_panic::no_panic)]
 #[inline]
 fn int_dtype(signed: bool, bits: u32) -> DType {
     let bits = bits.max(8);
@@ -122,7 +136,7 @@ fn int_dtype(signed: bool, bits: u32) -> DType {
     }
 }
 
-#[no_panic::no_panic]
+#[cfg_attr(feature = "no-panic", no_panic::no_panic)]
 #[inline]
 fn float_width(d: DType) -> u32 {
     match d {
@@ -133,7 +147,7 @@ fn float_width(d: DType) -> u32 {
     }
 }
 
-#[no_panic::no_panic]
+#[cfg_attr(feature = "no-panic", no_panic::no_panic)]
 #[inline]
 fn complex_real_width(d: DType) -> u32 {
     match d {
@@ -151,7 +165,7 @@ fn complex_real_width(d: DType) -> u32 {
 ///   u16 / i16             → 2
 ///   u32 / i32             → 8  (forces ≥ f64 when mixed with f16/f32)
 ///   u64 / i64             → 8
-#[no_panic::no_panic]
+#[cfg_attr(feature = "no-panic", no_panic::no_panic)]
 #[inline]
 fn effective_float_width(d: DType) -> u32 {
     match d {

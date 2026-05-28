@@ -75,6 +75,29 @@ fn flip_axis(a: &ArraysD, axis: usize) -> ArraysD {
         ArraysD::F64(x) => per!(F64, x),
         ArraysD::C64(x) => per!(C64, x),
         ArraysD::C128(x) => per!(C128, x),
+        // Non-numeric data: same slicing, but the inner array isn't Copy so
+        // we use a clone-based variant builder.
+        ArraysD::Object(x) => ArraysD::Object(x.slice(si.as_ref()).to_owned()),
+        ArraysD::Str { itemsize_chars, data } => ArraysD::Str {
+            itemsize_chars: *itemsize_chars,
+            data: data.slice(si.as_ref()).to_owned(),
+        },
+        ArraysD::Bytes { itemsize, data } => ArraysD::Bytes {
+            itemsize: *itemsize,
+            data: data.slice(si.as_ref()).to_owned(),
+        },
+        ArraysD::Datetime64 { unit, data } => ArraysD::Datetime64 {
+            unit: *unit,
+            data: data.slice(si.as_ref()).to_owned(),
+        },
+        ArraysD::Timedelta64 { unit, data } => ArraysD::Timedelta64 {
+            unit: *unit,
+            data: data.slice(si.as_ref()).to_owned(),
+        },
+        ArraysD::Void { layout, data } => ArraysD::Void {
+            layout: layout.clone(),
+            data: data.slice(si.as_ref()).to_owned(),
+        },
     }
 }
 
@@ -126,6 +149,49 @@ pub fn roll(a: &ArraysD, shift: isize, vm: &VirtualMachine) -> PyResult<ArraysD>
         ArraysD::F64(arr) => per!(F64, f64, arr),
         ArraysD::C64(arr) => per!(C64, crate::dtype::C32, arr),
         ArraysD::C128(arr) => per!(C128, crate::dtype::C64, arr),
+        // Non-numeric: use clone-based concatenation.
+        ref other => {
+            // Walk the storage element-wise via a closure that handles each
+            // variant. For roll on non-numeric we cycle the flat array.
+            macro_rules! per_clone {
+                ($wrap:expr, $arr:expr) => {{
+                    let v: Vec<_> = $arr.iter().cloned().collect();
+                    let mut new_v = Vec::with_capacity(v.len());
+                    new_v.extend_from_slice(&v[k..]);
+                    new_v.extend_from_slice(&v[..k]);
+                    let n = new_v.len();
+                    match ArrayD::from_shape_vec(IxDyn(&[n]), new_v) {
+                        Ok(d) => $wrap(d),
+                        Err(_) => return Ok(other.clone()),
+                    }
+                }};
+            }
+            let out: ArraysD = match other {
+                ArraysD::Object(arr) => per_clone!(ArraysD::Object, arr),
+                ArraysD::Str { itemsize_chars, data } => {
+                    let n = *itemsize_chars;
+                    per_clone!(|d| ArraysD::Str { itemsize_chars: n, data: d }, data)
+                }
+                ArraysD::Bytes { itemsize, data } => {
+                    let n = *itemsize;
+                    per_clone!(|d| ArraysD::Bytes { itemsize: n, data: d }, data)
+                }
+                ArraysD::Datetime64 { unit, data } => {
+                    let u = *unit;
+                    per_clone!(|d| ArraysD::Datetime64 { unit: u, data: d }, data)
+                }
+                ArraysD::Timedelta64 { unit, data } => {
+                    let u = *unit;
+                    per_clone!(|d| ArraysD::Timedelta64 { unit: u, data: d }, data)
+                }
+                ArraysD::Void { layout, data } => {
+                    let l = layout.clone();
+                    per_clone!(|d| ArraysD::Void { layout: l.clone(), data: d }, data)
+                }
+                _ => other.clone(),
+            };
+            out
+        }
     })
 }
 
@@ -331,6 +397,13 @@ fn zero_at(a: &mut ArraysD, idx: &[usize]) {
         ArraysD::F64(x) => x[i] = 0.0,
         ArraysD::C64(x) => x[i] = crate::dtype::C32::new(0.0, 0.0),
         ArraysD::C128(x) => x[i] = crate::dtype::C64::new(0.0, 0.0),
+        // Non-numeric zero: set the cell to its dtype's natural empty value.
+        ArraysD::Str { data, .. } => data[i] = String::new(),
+        ArraysD::Bytes { itemsize, data } => data[i] = vec![0u8; *itemsize as usize],
+        ArraysD::Datetime64 { data, .. } | ArraysD::Timedelta64 { data, .. } => data[i] = 0,
+        ArraysD::Void { layout, data } => data[i] = vec![0u8; layout.itemsize],
+        // Object: no vm available to construct a None ref; leave the cell as-is.
+        ArraysD::Object(_) => {}
     }
 }
 
@@ -364,6 +437,8 @@ fn set_one(a: &mut ArraysD, idx: &[usize]) {
         ArraysD::F64(x) => x[i] = 1.0,
         ArraysD::C64(x) => x[i] = crate::dtype::C32::new(1.0, 0.0),
         ArraysD::C128(x) => x[i] = crate::dtype::C64::new(1.0, 0.0),
+        // set_one is only meaningful for numeric variants; ignore otherwise.
+        _ => {}
     }
 }
 
@@ -701,6 +776,44 @@ pub fn delete(a: &ArraysD, idx: usize, vm: &VirtualMachine) -> PyResult<ArraysD>
         ArraysD::F64(arr) => per!(F64, f64, arr),
         ArraysD::C64(arr) => per!(C64, crate::dtype::C32, arr),
         ArraysD::C128(arr) => per!(C128, crate::dtype::C64, arr),
+        // Non-numeric path: clone-based delete.
+        ref other => {
+            macro_rules! per_clone {
+                ($wrap:expr, $arr:expr) => {{
+                    let mut v: Vec<_> = $arr.iter().cloned().collect();
+                    v.remove(idx);
+                    let n = v.len();
+                    match ArrayD::from_shape_vec(IxDyn(&[n]), v) {
+                        Ok(d) => $wrap(d),
+                        Err(_) => return Ok(other.clone()),
+                    }
+                }};
+            }
+            match other {
+                ArraysD::Object(arr) => per_clone!(ArraysD::Object, arr),
+                ArraysD::Str { itemsize_chars, data } => {
+                    let n = *itemsize_chars;
+                    per_clone!(|d| ArraysD::Str { itemsize_chars: n, data: d }, data)
+                }
+                ArraysD::Bytes { itemsize, data } => {
+                    let n = *itemsize;
+                    per_clone!(|d| ArraysD::Bytes { itemsize: n, data: d }, data)
+                }
+                ArraysD::Datetime64 { unit, data } => {
+                    let u = *unit;
+                    per_clone!(|d| ArraysD::Datetime64 { unit: u, data: d }, data)
+                }
+                ArraysD::Timedelta64 { unit, data } => {
+                    let u = *unit;
+                    per_clone!(|d| ArraysD::Timedelta64 { unit: u, data: d }, data)
+                }
+                ArraysD::Void { layout, data } => {
+                    let l = layout.clone();
+                    per_clone!(|d| ArraysD::Void { layout: l.clone(), data: d }, data)
+                }
+                _ => other.clone(),
+            }
+        }
     })
 }
 

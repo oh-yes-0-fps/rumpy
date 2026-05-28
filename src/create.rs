@@ -1,12 +1,14 @@
 //! Array constructors: zeros, ones, full, eye, arange, linspace.
 
-use crate::dtype::{ArraysD, C32, C64, DType};
+use crate::dtype::{ArraysD, C32, C64, DType, StructLayout};
 use half::f16;
 use ndarray::{ArrayD, IxDyn};
 use num_complex::Complex;
+use std::sync::Arc;
 
 pub fn zeros(shape: &[usize], dtype: DType) -> ArraysD {
     let s = IxDyn(shape);
+    let nelem: usize = shape.iter().product();
     match dtype {
         DType::Bool => ArraysD::Bool(ArrayD::from_elem(s, false)),
         DType::I8 => ArraysD::I8(ArrayD::zeros(s)),
@@ -22,6 +24,30 @@ pub fn zeros(shape: &[usize], dtype: DType) -> ArraysD {
         DType::F64 => ArraysD::F64(ArrayD::zeros(s)),
         DType::C64 => ArraysD::C64(ArrayD::from_elem(s, C32::new(0.0, 0.0))),
         DType::C128 => ArraysD::C128(ArrayD::from_elem(s, C64::new(0.0, 0.0))),
+        // Object zero-init: numpy uses None (not int 0). We can't construct a
+        // PyObjectRef without a vm — callers needing object zeros should use
+        // `zeros_object(vm, shape)` in lib.rs. As a fallback we return an
+        // empty 1D array so downstream code at least sees the right dtype.
+        DType::Object => ArraysD::Object(
+            crate::internal::empty_array(),
+        ),
+        DType::Str(n) => ArraysD::Str {
+            itemsize_chars: n,
+            data: ArrayD::from_elem(s, String::new()),
+        },
+        DType::Bytes(n) => ArraysD::Bytes {
+            itemsize: n,
+            data: ArrayD::from_elem(s, vec![0u8; n as usize]),
+        },
+        DType::Datetime64(u) => ArraysD::Datetime64 { unit: u, data: ArrayD::zeros(s) },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 { unit: u, data: ArrayD::zeros(s) },
+        DType::Void(n) => {
+            let _ = nelem;
+            ArraysD::Void {
+                layout: Arc::new(StructLayout::new(Vec::new(), n as usize)),
+                data: ArrayD::from_elem(s, vec![0u8; n as usize]),
+            }
+        }
     }
 }
 
@@ -42,6 +68,24 @@ pub fn ones(shape: &[usize], dtype: DType) -> ArraysD {
         DType::F64 => ArraysD::F64(ArrayD::from_elem(s, 1.0)),
         DType::C64 => ArraysD::C64(ArrayD::from_elem(s, C32::new(1.0, 0.0))),
         DType::C128 => ArraysD::C128(ArrayD::from_elem(s, C64::new(1.0, 0.0))),
+        // For non-numeric types "one" isn't well-defined; numpy returns
+        // arrays of "1"-ish defaults (e.g. b'1' for bytes). We use the
+        // matching numeric meaning where possible.
+        DType::Datetime64(u) => ArraysD::Datetime64 { unit: u, data: ArrayD::from_elem(s, 1) },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 { unit: u, data: ArrayD::from_elem(s, 1) },
+        DType::Str(n) => ArraysD::Str { itemsize_chars: n, data: ArrayD::from_elem(s, "1".to_string()) },
+        DType::Bytes(n) => {
+            let mut buf = vec![0u8; n as usize];
+            if !buf.is_empty() {
+                buf[0] = b'1';
+            }
+            ArraysD::Bytes { itemsize: n, data: ArrayD::from_elem(s, buf) }
+        }
+        DType::Object => ArraysD::Object(crate::internal::empty_array()),
+        DType::Void(n) => ArraysD::Void {
+            layout: Arc::new(StructLayout::new(Vec::new(), n as usize)),
+            data: ArrayD::from_elem(s, vec![0u8; n as usize]),
+        },
     }
 }
 
@@ -62,6 +106,19 @@ pub fn full_f64(shape: &[usize], value: f64, dtype: DType) -> ArraysD {
         DType::F64 => ArraysD::F64(ArrayD::from_elem(s, value)),
         DType::C64 => ArraysD::C64(ArrayD::from_elem(s, C32::new(value as f32, 0.0))),
         DType::C128 => ArraysD::C128(ArrayD::from_elem(s, C64::new(value, 0.0))),
+        DType::Datetime64(u) => ArraysD::Datetime64 { unit: u, data: ArrayD::from_elem(s, value as i64) },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 { unit: u, data: ArrayD::from_elem(s, value as i64) },
+        DType::Str(n) => ArraysD::Str { itemsize_chars: n, data: ArrayD::from_elem(s, format!("{value}")) },
+        DType::Bytes(n) => {
+            let mut bytes = format!("{value}").into_bytes();
+            bytes.resize(n as usize, 0);
+            ArraysD::Bytes { itemsize: n, data: ArrayD::from_elem(s, bytes) }
+        }
+        DType::Object => ArraysD::Object(crate::internal::empty_array()),
+        DType::Void(n) => ArraysD::Void {
+            layout: Arc::new(StructLayout::new(Vec::new(), n as usize)),
+            data: ArrayD::from_elem(s, vec![0u8; n as usize]),
+        },
     }
 }
 
@@ -90,6 +147,10 @@ fn set_one(a: &mut ArraysD, idx: &[usize]) {
         ArraysD::F64(x) => x[ix] = 1.0,
         ArraysD::C64(x) => x[ix] = Complex::new(1.0, 0.0),
         ArraysD::C128(x) => x[ix] = Complex::new(1.0, 0.0),
+        // eye() is only meaningful for numeric dtypes — non-numeric fall
+        // through to a no-op (the caller would have rejected the dtype
+        // earlier in real numpy).
+        _ => {}
     }
 }
 

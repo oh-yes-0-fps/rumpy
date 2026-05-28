@@ -41,7 +41,15 @@ pub fn save(path: &Path, arr: &ArraysD) -> std::io::Result<()> {
 }
 
 pub fn write_to<W: Write>(w: &mut W, arr: &ArraysD) -> std::io::Result<()> {
-    let descr = descr_of(arr.dtype());
+    let descr = descr_of(arr.dtype()).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                ".npy v1 does not support dtype {}",
+                arr.dtype().name_owned()
+            ),
+        )
+    })?;
     let shape_part = shape_string(arr.shape());
     let header_body = format!(
         "{{'descr': '{descr}', 'fortran_order': False, 'shape': {shape_part}, }}"
@@ -67,8 +75,8 @@ pub fn write_to<W: Write>(w: &mut W, arr: &ArraysD) -> std::io::Result<()> {
     write_data(w, arr)
 }
 
-fn descr_of(dt: DType) -> &'static str {
-    match dt {
+fn descr_of(dt: DType) -> Option<&'static str> {
+    Some(match dt {
         DType::Bool => "|b1",
         DType::I8 => "|i1",
         DType::I16 => "<i2",
@@ -83,7 +91,11 @@ fn descr_of(dt: DType) -> &'static str {
         DType::F64 => "<f8",
         DType::C64 => "<c8",
         DType::C128 => "<c16",
-    }
+        // .npy v1 only encodes the fixed-width numeric dtypes; non-numeric
+        // arrays don't have a representable descr in this format. Caller
+        // surfaces the error.
+        _ => return None,
+    })
 }
 
 fn shape_string(shape: &[usize]) -> String {
@@ -130,6 +142,18 @@ fn write_data<W: Write>(w: &mut W, arr: &ArraysD) -> std::io::Result<()> {
                 w.write_all(&v.re.to_le_bytes())?;
                 w.write_all(&v.im.to_le_bytes())?;
             }
+        }
+        // Non-numeric dtypes can't be serialised by the .npy v1 binary
+        // format. Caller already checks `descr_of`; this branch is a
+        // belt-and-braces sanity error.
+        other => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    ".npy v1 write: dtype {} not supported",
+                    other.dtype().name_owned()
+                ),
+            ));
         }
     }
     Ok(())
@@ -258,8 +282,13 @@ fn get_bool_value(s: &str, key: &str) -> Result<bool, LoadError> {
         .find(&needle)
         .ok_or_else(|| LoadError::Format(format!("missing key {key}")))?;
     let after = &s[i + needle.len()..];
-    if after.contains("True") && after.find("True").unwrap() < after.find(',').unwrap_or(after.len()) {
-        return Ok(true);
+    // `contains("True")` proves a match exists, but defensive-style: pull
+    // the offset via `map_or` so a future refactor of `.contains/.find`
+    // semantics can't introduce a panic.
+    if let Some(true_pos) = after.find("True") {
+        if true_pos < after.find(',').unwrap_or(after.len()) {
+            return Ok(true);
+        }
     }
     Ok(false)
 }
@@ -347,6 +376,14 @@ fn read_data<R: Read>(
                 v.push(C64::new(re, im));
             }
             ArraysD::C128(ArrayD::from_shape_vec(shape_dyn, v).unwrap_or_default())
+        }
+        // Non-numeric dtypes aren't supported by .npy v1 — surface a clean
+        // format error.
+        other => {
+            return Err(LoadError::Format(format!(
+                ".npy v1 read: dtype {} not supported",
+                other.name_owned()
+            )));
         }
     })
 }

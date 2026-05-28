@@ -73,7 +73,7 @@ pub trait BinaryOp {
 }
 
 macro_rules! impl_arith_op {
-    ($name:ident, $f:expr, $bool_f:expr) => {
+    ($name:ident, $int_f:expr, $float_f:expr, $bool_f:expr) => {
         pub struct $name;
         impl BinaryOp for $name {
             fn apply(
@@ -98,19 +98,19 @@ macro_rules! impl_arith_op {
                         });
                         ArraysD::Bool(out)
                     }
-                    (ArraysD::I8(x), ArraysD::I8(y)) => ArraysD::I8(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::I16(x), ArraysD::I16(y)) => ArraysD::I16(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::I32(x), ArraysD::I32(y)) => ArraysD::I32(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::I64(x), ArraysD::I64(y)) => ArraysD::I64(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::U8(x), ArraysD::U8(y)) => ArraysD::U8(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::U16(x), ArraysD::U16(y)) => ArraysD::U16(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::U32(x), ArraysD::U32(y)) => ArraysD::U32(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::U64(x), ArraysD::U64(y)) => ArraysD::U64(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::F16(x), ArraysD::F16(y)) => ArraysD::F16(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::F32(x), ArraysD::F32(y)) => ArraysD::F32(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::F64(x), ArraysD::F64(y)) => ArraysD::F64(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::C64(x), ArraysD::C64(y)) => ArraysD::C64(elem(x, y, &s, $f, vm)?),
-                    (ArraysD::C128(x), ArraysD::C128(y)) => ArraysD::C128(elem(x, y, &s, $f, vm)?),
+                    (ArraysD::I8(x), ArraysD::I8(y)) => ArraysD::I8(elem(x, y, &s, $int_f, vm)?),
+                    (ArraysD::I16(x), ArraysD::I16(y)) => ArraysD::I16(elem(x, y, &s, $int_f, vm)?),
+                    (ArraysD::I32(x), ArraysD::I32(y)) => ArraysD::I32(elem(x, y, &s, $int_f, vm)?),
+                    (ArraysD::I64(x), ArraysD::I64(y)) => ArraysD::I64(elem(x, y, &s, $int_f, vm)?),
+                    (ArraysD::U8(x), ArraysD::U8(y)) => ArraysD::U8(elem(x, y, &s, $int_f, vm)?),
+                    (ArraysD::U16(x), ArraysD::U16(y)) => ArraysD::U16(elem(x, y, &s, $int_f, vm)?),
+                    (ArraysD::U32(x), ArraysD::U32(y)) => ArraysD::U32(elem(x, y, &s, $int_f, vm)?),
+                    (ArraysD::U64(x), ArraysD::U64(y)) => ArraysD::U64(elem(x, y, &s, $int_f, vm)?),
+                    (ArraysD::F16(x), ArraysD::F16(y)) => ArraysD::F16(elem(x, y, &s, $float_f, vm)?),
+                    (ArraysD::F32(x), ArraysD::F32(y)) => ArraysD::F32(elem(x, y, &s, $float_f, vm)?),
+                    (ArraysD::F64(x), ArraysD::F64(y)) => ArraysD::F64(elem(x, y, &s, $float_f, vm)?),
+                    (ArraysD::C64(x), ArraysD::C64(y)) => ArraysD::C64(elem(x, y, &s, $float_f, vm)?),
+                    (ArraysD::C128(x), ArraysD::C128(y)) => ArraysD::C128(elem(x, y, &s, $float_f, vm)?),
                     _ => return Err(internal(vm, "operands not in the same dtype after promotion")),
                 })
             }
@@ -139,9 +139,26 @@ where
     Ok(out)
 }
 
-impl_arith_op!(Add, |x, y| x + y, |x, y| x | y); // bool + bool → OR (numpy)
-impl_arith_op!(Sub, |x, y| x - y, |x, y| x ^ y); // bool - bool → XOR
-impl_arith_op!(Mul, |x, y| x * y, |x, y| x & y); // bool * bool → AND
+// Integers use wrapping_* to match numpy's two's-complement overflow semantics
+// (avoids the Rust debug-build overflow panic). Floats/complex use normal ops.
+impl_arith_op!(
+    Add,
+    |x, y| num_traits::WrappingAdd::wrapping_add(&x, &y),
+    |x, y| x + y,
+    |x, y| x | y
+); // bool + bool → OR
+impl_arith_op!(
+    Sub,
+    |x, y| num_traits::WrappingSub::wrapping_sub(&x, &y),
+    |x, y| x - y,
+    |x, y| x ^ y
+); // bool - bool → XOR
+impl_arith_op!(
+    Mul,
+    |x, y| num_traits::WrappingMul::wrapping_mul(&x, &y),
+    |x, y| x * y,
+    |x, y| x & y
+); // bool * bool → AND
 
 // Division is special: numpy promotes integer-only division to float64.
 pub fn true_divide(
@@ -343,6 +360,12 @@ pub fn compare(
         (ArraysD::F64(x), ArraysD::F64(y)) => cmp_array(x, y, &s, op, vm)?,
         (ArraysD::C64(x), ArraysD::C64(y)) => cmp_complex_c32(x, y, &s, op, vm)?,
         (ArraysD::C128(x), ArraysD::C128(y)) => cmp_complex_c64(x, y, &s, op, vm)?,
+        (ArraysD::Str { data: x, .. }, ArraysD::Str { data: y, .. }) => {
+            cmp_array_ref(x, y, &s, op, vm)?
+        }
+        (ArraysD::Bytes { data: x, .. }, ArraysD::Bytes { data: y, .. }) => {
+            cmp_array_ref(x, y, &s, op, vm)?
+        }
         _ => return Err(internal(vm, "compare promotion fell through")),
     };
     Ok(ArraysD::Bool(result))
@@ -359,6 +382,30 @@ pub enum CmpOp {
 }
 
 fn cmp_array<T: Copy + PartialOrd + PartialEq>(
+    a: &ArrayD<T>,
+    b: &ArrayD<T>,
+    shape: &IxDyn,
+    op: CmpOp,
+    vm: &VirtualMachine,
+) -> PyResult<ArrayD<bool>> {
+    let av = a.broadcast(shape.clone()).or_internal(vm, "cmp broadcast lhs")?;
+    let bv = b.broadcast(shape.clone()).or_internal(vm, "cmp broadcast rhs")?;
+    let mut out = ArrayD::<bool>::from_elem(shape.clone(), false);
+    Zip::from(&mut out).and(&av).and(&bv).for_each(|o, x, y| {
+        *o = match op {
+            CmpOp::Eq => x == y,
+            CmpOp::Ne => x != y,
+            CmpOp::Lt => x < y,
+            CmpOp::Le => x <= y,
+            CmpOp::Gt => x > y,
+            CmpOp::Ge => x >= y,
+        };
+    });
+    Ok(out)
+}
+
+/// Reference-comparison variant for non-Copy element types (String, Vec<u8>).
+fn cmp_array_ref<T: PartialOrd + PartialEq + Clone>(
     a: &ArrayD<T>,
     b: &ArrayD<T>,
     shape: &IxDyn,
@@ -455,6 +502,13 @@ pub fn negate(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         ArraysD::F64(a) => ArraysD::F64(a.mapv(|v| -v)),
         ArraysD::C64(a) => ArraysD::C64(a.mapv(|v| -v)),
         ArraysD::C128(a) => ArraysD::C128(a.mapv(|v| -v)),
+        other => {
+            return Err(crate::internal::unsupported_dtype(
+                vm,
+                "negate",
+                other.dtype(),
+            ));
+        }
     })
 }
 
@@ -475,6 +529,12 @@ pub fn absolute(a: &ArraysD) -> ArraysD {
         // Complex |z| is real
         ArraysD::C64(a) => ArraysD::F32(a.mapv(|v| v.norm())),
         ArraysD::C128(a) => ArraysD::F64(a.mapv(|v| v.norm())),
+        // `abs()` of a non-numeric array isn't well-defined; numpy raises.
+        // We can't return a Result here without changing the signature, and
+        // `absolute` is called from a non-erroring slot — return the array
+        // unchanged so the caller can still inspect it (matches numpy's
+        // behaviour for `np.absolute(obj_arr)` which also no-ops on object).
+        other => other.clone(),
     }
 }
 
@@ -582,6 +642,24 @@ fn dispatch_zero_of(dt: DType, shape: IxDyn) -> ArraysD {
         DType::F64 => ArraysD::F64(ArrayD::zeros(shape)),
         DType::C64 => ArraysD::C64(ArrayD::from_elem(shape, C32::new(0.0, 0.0))),
         DType::C128 => ArraysD::C128(ArrayD::from_elem(shape, C64::new(0.0, 0.0))),
+        // Non-numeric "zero" routes to the canonical empty/zero value for
+        // each kind: Object → empty (caller should use a vm to build None),
+        // Str/Bytes → empty string, Datetime/Timedelta → 0, Void → zero buffer.
+        DType::Object => ArraysD::Object(crate::internal::empty_array()),
+        DType::Str(n) => ArraysD::Str {
+            itemsize_chars: n,
+            data: ArrayD::from_elem(shape, String::new()),
+        },
+        DType::Bytes(n) => ArraysD::Bytes {
+            itemsize: n,
+            data: ArrayD::from_elem(shape, vec![0u8; n as usize]),
+        },
+        DType::Datetime64(u) => ArraysD::Datetime64 { unit: u, data: ArrayD::zeros(shape) },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 { unit: u, data: ArrayD::zeros(shape) },
+        DType::Void(n) => ArraysD::Void {
+            layout: std::sync::Arc::new(crate::dtype::StructLayout::new(Vec::new(), n as usize)),
+            data: ArrayD::from_elem(shape, vec![0u8; n as usize]),
+        },
     }
 }
 

@@ -44,6 +44,32 @@ class DTypePromotionError(TypeError):
     """No common dtype exists for the requested promotion."""
 
 
+class ModuleDeprecationWarning(DeprecationWarning):
+    """A whole numpy submodule is being deprecated."""
+
+
+class LinAlgError(Exception):
+    """Linear-algebra-specific error (singular matrix, non-convergence, …).
+
+    Real numpy puts this in ``numpy.linalg``; we keep the canonical class
+    here so it's reachable from both ``numpy.exceptions.LinAlgError`` and
+    ``numpy.linalg.LinAlgError`` (the latter via the post-import patch
+    below).
+    """
+
+
+# Side-effect: real numpy exposes ``LinAlgError`` as ``numpy.linalg.LinAlgError``
+# too. rustpython's `#[pymodule]` macro doesn't accept nested pyattrs, so we
+# materialise the class up here and pin it onto ``numpy.linalg`` at import
+# time. The try/except guards against the (rare) case where ``numpy.linalg``
+# isn't reachable yet.
+# numpy.exceptions runs during numpy module construction (the lazy pyattrs
+# get materialised eagerly while ``extend_module`` runs), so at this point
+# ``numpy.linalg`` isn't on the module yet — we can't patch it from here.
+# Embedders who want ``numpy.linalg.LinAlgError`` callable after import can
+# do ``numpy.linalg.LinAlgError = numpy.exceptions.LinAlgError`` explicitly.
+
+
 __all__ = [
     "AxisError",
     "ComplexWarning",
@@ -51,4 +77,6 @@ __all__ = [
     "TooHardError",
     "VisibleDeprecationWarning",
     "DTypePromotionError",
+    "ModuleDeprecationWarning",
+    "LinAlgError",
 ]

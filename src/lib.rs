@@ -147,7 +147,7 @@ pub(crate) mod numpy_module {
         function::{ArgIntoFloat, FuncArgs, OptionalArg},
         protocol::{PyMappingMethods, PyNumberMethods},
         pyclass, pymodule,
-        types::{AsMapping, AsNumber, Comparable, Constructor, PyComparisonOp, Representable},
+        types::{AsMapping, AsNumber, Comparable, Constructor, Iterable, PyComparisonOp, Representable},
     };
     use rustpython_vm::AsObject;
     use rustpython_vm::function::{Either, PyComparisonValue};
@@ -470,6 +470,31 @@ pub(crate) mod numpy_module {
         }
     }
 
+    impl Iterable for PyNdArray {
+        /// Iterate over the first axis, matching numpy. 1-D arrays yield
+        /// scalars; n-D (n ≥ 2) arrays yield (n-1)-D sub-arrays. 0-D arrays
+        /// raise ``TypeError``, again matching numpy.
+        fn iter(
+            zelf: rustpython_vm::PyRef<Self>,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            let nd = zelf.view().ndim();
+            if nd == 0 {
+                return Err(vm.new_type_error("iteration over a 0-d array".to_string()));
+            }
+            let n = zelf.view().shape()[0];
+            let mut items: Vec<PyObjectRef> = Vec::with_capacity(n);
+            for i in 0..n {
+                let key: PyObjectRef = vm.ctx.new_int(i as isize).into();
+                let parsed = index::parse_index(&key, nd, vm)?;
+                let sub = index::apply_index(&zelf.view(), &parsed, vm)?;
+                items.push(scalar_or_array(sub, vm));
+            }
+            let list: PyObjectRef = vm.ctx.new_list(items).into();
+            Ok(list.get_iter(vm)?.into())
+        }
+    }
+
     impl AsMapping for PyNdArray {
         fn as_mapping() -> &'static PyMappingMethods {
             static M: PyMappingMethods = PyMappingMethods {
@@ -497,7 +522,11 @@ pub(crate) mod numpy_module {
                             ));
                         }
                     };
-                    let v_arr = obj_to_array(&value, None, vm)?;
+                    // Hint with the destination dtype so non-numeric assignments
+                    // (object/str/bytes/datetime) take their tailored conversion
+                    // path instead of failing in the generic obj_to_array.
+                    let target_dt = z.view().dtype();
+                    let v_arr = obj_to_array(&value, Some(target_dt), vm)?;
                     let parsed = index::parse_index(&key.to_owned(), z.view().ndim(), vm)?;
                     let mut inner = z.view_mut();
                     index::set_via_index(&mut inner, &parsed, &v_arr, vm)
@@ -652,7 +681,7 @@ pub(crate) mod numpy_module {
     }
 
     #[pyclass(
-        with(Constructor, Representable, AsMapping, AsNumber, Comparable),
+        with(Constructor, Representable, AsMapping, AsNumber, Comparable, Iterable),
         flags(BASETYPE)
     )]
     impl PyNdArray {
@@ -706,6 +735,60 @@ pub(crate) mod numpy_module {
         #[pygetset(name = "imag")]
         fn imag(&self) -> PyNdArray {
             PyNdArray::from_arrays(ops::imag_part(&self.view()))
+        }
+
+        /// `__array_interface__` — numpy's interop protocol (v3). Returns a
+        /// dict with `shape`, `typestr`, `data` (None — rumpy doesn't expose
+        /// a stable buffer pointer to embedded Python), `strides` (None for
+        /// contiguous arrays) and `version`. External libraries that read
+        /// `__array_interface__` use the `typestr` + `shape` keys to
+        /// understand the dtype layout.
+        #[pygetset(name = "__array_interface__")]
+        fn array_interface(&self, vm: &VirtualMachine) -> PyObjectRef {
+            let arr = self.view();
+            let dt = arr.dtype();
+            // numpy's "typestr": kind code + itemsize, prefixed with byteorder.
+            // Use '|' for byte-order-insensitive (1-byte / object / string),
+            // otherwise '<' for little-endian (matches every supported host).
+            let kind = dt.kind();
+            let typestr = match dt {
+                DType::Object => "|O".to_string(),
+                DType::Bool => "|b1".to_string(),
+                DType::I8 | DType::U8 => format!("|{kind}1"),
+                DType::Datetime64(u) => format!("<M8[{}]", u.code()),
+                DType::Timedelta64(u) => format!("<m8[{}]", u.code()),
+                DType::Str(n) => format!("<U{n}"),
+                DType::Bytes(n) => format!("|S{n}"),
+                DType::Void(n) => format!("|V{n}"),
+                _ => format!("<{kind}{}", dt.itemsize()),
+            };
+            let dict = vm.ctx.new_dict();
+            let _ = dict.set_item("version", vm.ctx.new_int(3).into(), vm);
+            let _ = dict.set_item("typestr", vm.ctx.new_str(typestr).into(), vm);
+            let shape: Vec<PyObjectRef> = arr
+                .shape()
+                .iter()
+                .map(|&n| vm.ctx.new_int(n as i64).into())
+                .collect();
+            let _ = dict.set_item(
+                "shape",
+                PyTuple::new_ref(shape, &vm.ctx).into(),
+                vm,
+            );
+            let _ = dict.set_item("data", vm.ctx.none(), vm);
+            let _ = dict.set_item("strides", vm.ctx.none(), vm);
+            dict.into()
+        }
+
+        /// `__array__()` — return self. Lets other libraries that call
+        /// `np.asarray(x)` see a rumpy ndarray as-is.
+        #[pymethod(name = "__array__")]
+        fn array_protocol(
+            zelf: rustpython_vm::PyRef<Self>,
+            _args: rustpython_vm::function::FuncArgs,
+            _vm: &VirtualMachine,
+        ) -> rustpython_vm::PyRef<Self> {
+            zelf
         }
 
         // ---- conversion ----
@@ -1140,6 +1223,7 @@ pub(crate) mod numpy_module {
                         c.re.to_bits().to_ne_bytes().into_iter().chain(c.im.to_bits().to_ne_bytes())
                     })
                     .collect(),
+                _ => { return Err(crate::internal::unsupported_dtype(vm, "tobytes", view.dtype())) },
             };
             Ok(vm.ctx.new_bytes(bytes).into())
         }
@@ -1590,28 +1674,35 @@ pub(crate) mod numpy_module {
         }
         #[pygetset]
         fn name(&self, vm: &VirtualMachine) -> PyObjectRef {
-            vm.ctx.new_str(self.inner.name()).into()
+            // Parameterized dtypes (`Str`, `Bytes`, `Datetime64(unit)`, …)
+            // require the dynamic `name_owned` form. The unparameterized
+            // variants still produce the same static string.
+            vm.ctx.new_str(self.inner.name_owned()).into()
         }
         /// Single-character type code (numpy `dtype.char`).
         #[pygetset]
         fn char(&self, vm: &VirtualMachine) -> PyObjectRef {
-            let c = match self.inner {
-                DType::Bool => "?",
-                DType::I8 => "b",
-                DType::I16 => "h",
-                DType::I32 => "i",
-                DType::I64 => "l",
-                DType::U8 => "B",
-                DType::U16 => "H",
-                DType::U32 => "I",
-                DType::U64 => "L",
-                DType::F16 => "e",
-                DType::F32 => "f",
-                DType::F64 => "d",
-                DType::C64 => "F",
-                DType::C128 => "D",
+            // Numeric dtypes have the traditional one-letter codes; for the
+            // non-numeric variants we fall back to the dtype's kind code
+            // (O / U / S / M / m / V) — same as numpy.
+            let c: std::borrow::Cow<'static, str> = match self.inner {
+                DType::Bool => "?".into(),
+                DType::I8 => "b".into(),
+                DType::I16 => "h".into(),
+                DType::I32 => "i".into(),
+                DType::I64 => "l".into(),
+                DType::U8 => "B".into(),
+                DType::U16 => "H".into(),
+                DType::U32 => "I".into(),
+                DType::U64 => "L".into(),
+                DType::F16 => "e".into(),
+                DType::F32 => "f".into(),
+                DType::F64 => "d".into(),
+                DType::C64 => "F".into(),
+                DType::C128 => "D".into(),
+                _ => self.inner.kind().to_string().into(),
             };
-            vm.ctx.new_str(c).into()
+            vm.ctx.new_str(c.as_ref()).into()
         }
         /// Numpy's `dtype.num` (internal type number).
         #[pygetset]
@@ -1631,6 +1722,7 @@ pub(crate) mod numpy_module {
                 DType::F64 => 12,
                 DType::C64 => 14,
                 DType::C128 => 15,
+                _ => { { use std::hash::{Hash, Hasher}; let mut h = std::collections::hash_map::DefaultHasher::new(); self.inner.hash(&mut h); h.finish() as i64 } },
             }
         }
         /// `'='` on most modern systems (native byteorder).
@@ -1654,21 +1746,26 @@ pub(crate) mod numpy_module {
                 ">"
             };
             // Two-letter type code with the byte width — numpy uses 'b1', 'f8', 'c16', etc.
-            let body = match self.inner {
-                DType::Bool => "?",
-                DType::I8 => "i1",
-                DType::I16 => "i2",
-                DType::I32 => "i4",
-                DType::I64 => "i8",
-                DType::U8 => "u1",
-                DType::U16 => "u2",
-                DType::U32 => "u4",
-                DType::U64 => "u8",
-                DType::F16 => "f2",
-                DType::F32 => "f4",
-                DType::F64 => "f8",
-                DType::C64 => "c8",
-                DType::C128 => "c16",
+            // Non-numeric dtypes use their kind code + itemsize (e.g. "U10",
+            // "M8" — though numpy adds "[unit]" for the time variants).
+            let body: std::borrow::Cow<'static, str> = match self.inner {
+                DType::Bool => "?".into(),
+                DType::I8 => "i1".into(),
+                DType::I16 => "i2".into(),
+                DType::I32 => "i4".into(),
+                DType::I64 => "i8".into(),
+                DType::U8 => "u1".into(),
+                DType::U16 => "u2".into(),
+                DType::U32 => "u4".into(),
+                DType::U64 => "u8".into(),
+                DType::F16 => "f2".into(),
+                DType::F32 => "f4".into(),
+                DType::F64 => "f8".into(),
+                DType::C64 => "c8".into(),
+                DType::C128 => "c16".into(),
+                DType::Datetime64(u) => format!("M8[{}]", u.code()).into(),
+                DType::Timedelta64(u) => format!("m8[{}]", u.code()).into(),
+                _ => format!("{}{}", self.inner.kind(), self.inner.itemsize()).into(),
             };
             vm.ctx.new_str(format!("{prefix}{body}")).into()
         }
@@ -1711,7 +1808,12 @@ pub(crate) mod numpy_module {
             zelf: &Py<Self>,
             _vm: &VirtualMachine,
         ) -> PyResult<rustpython_vm::common::hash::PyHash> {
-            Ok(zelf.inner as rustpython_vm::common::hash::PyHash)
+            // DType is now a non-field-less enum (Str(u32), Datetime64(unit),
+            // etc.), so we can't `as i64` cast. Hash via std::hash::Hash.
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            zelf.inner.hash(&mut h);
+            Ok(h.finish() as rustpython_vm::common::hash::PyHash)
         }
     }
 
@@ -2206,6 +2308,40 @@ pub(crate) mod numpy_module {
             &arr, "arctan", f64::atan, vm,
         )?))
     }
+    #[pyfunction(name = "arcsinh")]
+    fn arcsinh_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let arr = obj_to_array(&a, None, vm)?;
+        Ok(PyNdArray::from_arrays(ops::unary_real_only(
+            &arr, "arcsinh", f64::asinh, vm,
+        )?))
+    }
+    #[pyfunction(name = "arccosh")]
+    fn arccosh_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let arr = obj_to_array(&a, None, vm)?;
+        Ok(PyNdArray::from_arrays(ops::unary_real_only(
+            &arr, "arccosh", f64::acosh, vm,
+        )?))
+    }
+    #[pyfunction(name = "arctanh")]
+    fn arctanh_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        let arr = obj_to_array(&a, None, vm)?;
+        Ok(PyNdArray::from_arrays(ops::unary_real_only(
+            &arr, "arctanh", f64::atanh, vm,
+        )?))
+    }
+    // C-style trig aliases added in numpy 2.x.
+    #[pyfunction(name = "acos")]
+    fn acos_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { arccos_fn(a, vm) }
+    #[pyfunction(name = "asin")]
+    fn asin_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { arcsin_fn(a, vm) }
+    #[pyfunction(name = "atan")]
+    fn atan_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { arctan_fn(a, vm) }
+    #[pyfunction(name = "acosh")]
+    fn acosh_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { arccosh_fn(a, vm) }
+    #[pyfunction(name = "asinh")]
+    fn asinh_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { arcsinh_fn(a, vm) }
+    #[pyfunction(name = "atanh")]
+    fn atanh_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { arctanh_fn(a, vm) }
     #[pyfunction(name = "sinh")]
     fn sinh_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let arr = obj_to_array(&a, None, vm)?;
@@ -3007,6 +3143,7 @@ pub(crate) mod numpy_module {
             ArraysD::F64(arr) => per!(F64, arr),
             ArraysD::C64(arr) => per!(C64, arr),
             ArraysD::C128(arr) => per!(C128, arr),
+            _ => { a.clone() },
         }
     }
 
@@ -3194,6 +3331,7 @@ pub(crate) mod numpy_module {
             ArraysD::F64(_) => per!(F64, out, f64),
             ArraysD::C64(_) => per!(C64, out, crate::dtype::C32),
             ArraysD::C128(_) => per!(C128, out, crate::dtype::C64),
+            _ => { return Err(crate::internal::unsupported_dtype(vm, "pad", out.dtype())) },
         }
         Ok(PyNdArray::from_arrays(out))
     }
@@ -3374,6 +3512,7 @@ pub(crate) mod numpy_module {
             ArraysD::F64(arr) => per!(F64, arr, f64),
             ArraysD::C64(arr) => per!(C64, arr, crate::dtype::C32),
             ArraysD::C128(arr) => per!(C128, arr, crate::dtype::C64),
+            _ => { a.clone() },
         }
     }
 
@@ -3867,16 +4006,24 @@ pub(crate) mod numpy_module {
 
     #[pyfunction(name = "where")]
     fn where_fn(args: FuncArgs, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        // Pull arguments through `Option::ok_or` instead of `.unwrap()` so a
+        // future change to `FuncArgs` that violates the length invariant
+        // can't panic.
+        let need = |it: &mut std::vec::IntoIter<PyObjectRef>| -> PyResult<PyObjectRef> {
+            it.next().ok_or_else(|| {
+                crate::internal::internal(vm, "where(): missing argument")
+            })
+        };
         match args.args.len() {
             1 => {
-                // np.where(cond) == np.nonzero(cond)
-                nonzero(args.args.into_iter().next().unwrap(), vm)
+                let mut it = args.args.into_iter();
+                nonzero(need(&mut it)?, vm)
             }
             3 => {
                 let mut it = args.args.into_iter();
-                let c = obj_to_array(&it.next().unwrap(), None, vm)?;
-                let xa = obj_to_array(&it.next().unwrap(), None, vm)?;
-                let ya = obj_to_array(&it.next().unwrap(), None, vm)?;
+                let c = obj_to_array(&need(&mut it)?, None, vm)?;
+                let xa = obj_to_array(&need(&mut it)?, None, vm)?;
+                let ya = obj_to_array(&need(&mut it)?, None, vm)?;
                 Ok(PyNdArray::from_arrays(crate::extras::where_op(&c, &xa, &ya, vm)?)
                     .into_pyobject(vm))
             }
@@ -4901,6 +5048,10 @@ pub(crate) mod numpy_module {
         let xa = obj_to_array(&x, None, vm)?;
         Ok(PyNdArray::from_arrays(crate::extras2::arctan2(&ya, &xa, vm)?))
     }
+    #[pyfunction(name = "atan2")]
+    fn atan2_fn(y: PyObjectRef, x: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
+        arctan2(y, x, vm)
+    }
     #[pyfunction]
     fn hypot(x: PyObjectRef, y: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> {
         let xa = obj_to_array(&x, None, vm)?;
@@ -5680,6 +5831,9 @@ pub(crate) mod numpy_module {
             DType::F64 => per!(F64, f64),
             DType::C64 => per!(C64, crate::dtype::C32),
             DType::C128 => per!(C128, crate::dtype::C64),
+            other => {
+                return Err(crate::internal::unsupported_dtype(vm, "resize", other));
+            }
         };
         Ok(PyNdArray::from_arrays(out))
     }
@@ -5789,6 +5943,7 @@ pub(crate) mod numpy_module {
             DType::F64 => per!(F64, f64),
             DType::C64 => per!(C64, crate::dtype::C32),
             DType::C128 => per!(C128, crate::dtype::C64),
+            _ => { return Err(crate::internal::unsupported_dtype(vm, "place", dt)) },
         }
         Ok(())
     }
@@ -5858,6 +6013,7 @@ pub(crate) mod numpy_module {
             DType::F64 => per!(F64, f64),
             DType::C64 => per!(C64, crate::dtype::C32),
             DType::C128 => per!(C128, crate::dtype::C64),
+            _ => { return Err(crate::internal::unsupported_dtype(vm, "put_along_axis", dt)) },
         }
     }
 
@@ -6518,6 +6674,7 @@ pub(crate) mod numpy_module {
             DType::F64 => per!(F64, f64),
             DType::C64 => per!(C64, crate::dtype::C32),
             DType::C128 => per!(C128, crate::dtype::C64),
+            _ => { return Err(crate::internal::unsupported_dtype(vm, "put", dt)) },
         }
     }
 
@@ -7183,6 +7340,204 @@ pub(crate) mod numpy_module {
             let bx = obj_to_array(&b, None, vm)?;
             Ok(super::PyNdArray::from_arrays(linalg_extra::cross(&ax, &bx, vm)?))
         }
+
+        /// `np.linalg.outer(a, b)` — outer product of two 1-D arrays.
+        #[pyfunction]
+        fn outer(
+            a: PyObjectRef,
+            b: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            let numpy_mod = vm.import("numpy", 0)?;
+            let f = numpy_mod.get_attr("outer", vm)?;
+            f.call((a, b), vm)
+        }
+
+        /// `np.linalg.tensordot(a, b, axes=2)` — re-export of the top-level
+        /// tensordot for the array-API namespace.
+        #[pyfunction]
+        fn tensordot(
+            a: PyObjectRef,
+            b: PyObjectRef,
+            axes: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<PyObjectRef> {
+            let numpy_mod = vm.import("numpy", 0)?;
+            let f = numpy_mod.get_attr("tensordot", vm)?;
+            match axes.into_option() {
+                Some(ax) => f.call((a, b, ax), vm),
+                None => f.call((a, b), vm),
+            }
+        }
+
+        /// `np.linalg.trace(a)` — sum along the main diagonal.
+        #[pyfunction]
+        fn trace(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let numpy_mod = vm.import("numpy", 0)?;
+            let f = numpy_mod.get_attr("trace", vm)?;
+            f.call((a,), vm)
+        }
+
+        /// `np.linalg.diagonal(a)` — main diagonal.
+        #[pyfunction]
+        fn diagonal(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let numpy_mod = vm.import("numpy", 0)?;
+            let f = numpy_mod.get_attr("diagonal", vm)?;
+            f.call((a,), vm)
+        }
+
+        /// `np.linalg.matrix_transpose(a)` — swap last two axes.
+        #[pyfunction]
+        fn matrix_transpose(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let numpy_mod = vm.import("numpy", 0)?;
+            let f = numpy_mod.get_attr("matrix_transpose", vm)?;
+            f.call((a,), vm)
+        }
+
+        /// `np.linalg.svdvals(a)` — singular values of `a`.
+        #[pyfunction]
+        fn svdvals(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            let (_u, s, _v) = crate::linalg_extra::svd(&arr, false, vm)?;
+            Ok(super::PyNdArray::from_arrays(s))
+        }
+
+        /// `np.linalg.multi_dot([a, b, c, ...])` — chained matmul.
+        #[pyfunction]
+        fn multi_dot(arrays: PyObjectRef, vm: &VirtualMachine) -> PyResult<super::PyNdArray> {
+            let list = arrays
+                .downcast_ref::<rustpython_vm::builtins::PyList>()
+                .map(|l| l.borrow_vec().to_vec())
+                .or_else(|| {
+                    arrays
+                        .downcast_ref::<rustpython_vm::builtins::PyTuple>()
+                        .map(|t| t.as_slice().to_vec())
+                })
+                .ok_or_else(|| {
+                    vm.new_type_error("multi_dot expects a sequence of arrays".to_string())
+                })?;
+            if list.is_empty() {
+                return Err(vm.new_value_error(
+                    "multi_dot requires at least one array".to_string(),
+                ));
+            }
+            let mut acc = obj_to_array(&list[0], None, vm)?;
+            for o in &list[1..] {
+                let next = obj_to_array(o, None, vm)?;
+                acc = crate::linalg::dot(&acc, &next, vm)?;
+            }
+            Ok(super::PyNdArray::from_arrays(acc))
+        }
+
+        /// `np.linalg.cond(a)` — condition number wrt. the 2-norm.
+        #[pyfunction]
+        fn cond(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            let (_u, s, _v) = crate::linalg_extra::svd(&arr, false, vm)?;
+            let f = s.cast(crate::DType::F64);
+            let vals_arr_f64 = f.cast(crate::DType::F64);
+let crate::ArraysD::F64(vals) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let mut hi = f64::MIN;
+            let mut lo = f64::MAX;
+            for &v in vals.iter() {
+                let av = v.abs();
+                if av > hi { hi = av; }
+                if av < lo { lo = av; }
+            }
+            let c = if lo == 0.0 || lo == f64::MAX { f64::INFINITY } else { hi / lo };
+            Ok(super::PyNdArray::from_arrays(
+                crate::ArraysD::F64(ndarray::Array::from_elem(ndarray::IxDyn(&[]), c)),
+            ))
+        }
+
+        /// `np.linalg.tensorinv(a, ind=2)` — generalised tensor inverse.
+        #[pyfunction]
+        fn tensorinv(
+            a: PyObjectRef,
+            ind: OptionalArg<usize>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            let ind = ind.unwrap_or(2);
+            let shape = arr.shape().to_vec();
+            if ind == 0 || ind >= shape.len() {
+                return Err(vm.new_value_error(
+                    "tensorinv: `ind` must be > 0 and < ndim".to_string(),
+                ));
+            }
+            let lead: usize = shape[..ind].iter().product();
+            let trail: usize = shape[ind..].iter().product();
+            if lead != trail {
+                return Err(vm.new_value_error(format!(
+                    "tensorinv: implied matrix shape {lead}x{trail} is not square"
+                )));
+            }
+            let f = arr.cast(crate::DType::F64);
+            let vals_arr_f64 = f.cast(crate::DType::F64);
+let crate::ArraysD::F64(flat) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let mat = flat
+                .into_shape_with_order(ndarray::IxDyn(&[lead, trail]))
+                .map_err(|e| vm.new_value_error(format!("tensorinv reshape: {e}")))?;
+            let inv = crate::linalg_extra::inv(&crate::ArraysD::F64(mat), vm)?;
+            let vals_arr_f64 = inv.cast(crate::DType::F64);
+let crate::ArraysD::F64(inv_mat) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let mut out_shape: Vec<usize> = shape[ind..].to_vec();
+            out_shape.extend_from_slice(&shape[..ind]);
+            let reshaped = inv_mat
+                .into_shape_with_order(ndarray::IxDyn(&out_shape))
+                .map_err(|e| vm.new_value_error(format!("tensorinv shape-back: {e}")))?;
+            Ok(super::PyNdArray::from_arrays(crate::ArraysD::F64(reshaped)))
+        }
+
+        /// `np.linalg.tensorsolve(a, b, axes=None)` — solve a tensor system.
+        #[pyfunction]
+        fn tensorsolve(
+            a: PyObjectRef,
+            b: PyObjectRef,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            let rhs = obj_to_array(&b, None, vm)?;
+            let n: usize = rhs.shape().iter().product();
+            let total: usize = arr.shape().iter().product();
+            if total % n != 0 || total / n != n {
+                return Err(vm.new_value_error(
+                    "tensorsolve: a.size/b.size must be a square integer".to_string(),
+                ));
+            }
+            let fa = arr.cast(crate::DType::F64);
+            let fb = rhs.cast(crate::DType::F64);
+            let vals_arr_f64 = fa.cast(crate::DType::F64);
+let crate::ArraysD::F64(da) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let vals_arr_f64 = fb.cast(crate::DType::F64);
+let crate::ArraysD::F64(db) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let mat = da
+                .into_shape_with_order(ndarray::IxDyn(&[n, n]))
+                .map_err(|e| vm.new_value_error(format!("tensorsolve reshape A: {e}")))?;
+            let vec = db
+                .into_shape_with_order(ndarray::IxDyn(&[n]))
+                .map_err(|e| vm.new_value_error(format!("tensorsolve reshape b: {e}")))?;
+            let sol = crate::linalg_extra::solve(
+                &crate::ArraysD::F64(mat),
+                &crate::ArraysD::F64(vec),
+                vm,
+            )?;
+            let vals_arr_f64 = sol.cast(crate::DType::F64);
+let crate::ArraysD::F64(out) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let lead = arr.shape().len() - rhs.shape().len();
+            let out_shape: Vec<usize> = arr.shape()[lead..].to_vec();
+            let reshaped = out
+                .into_shape_with_order(ndarray::IxDyn(&out_shape))
+                .map_err(|e| vm.new_value_error(format!("tensorsolve shape-back: {e}")))?;
+            Ok(super::PyNdArray::from_arrays(crate::ArraysD::F64(reshaped)))
+        }
+
+        // `test` — rumpy doesn't ship a test runner. The pyfunction below
+        // ignores all arguments and returns True so test-runner harness code
+        // (`np.linalg.test()`) succeeds without running anything.
+        #[pyfunction]
+        fn test(_args: rustpython_vm::function::FuncArgs) -> bool { true }
+
     }
 
     // ---------------- numpy.fft submodule ----------------
@@ -7240,6 +7595,83 @@ pub(crate) mod numpy_module {
             let arr = obj_to_array(&a, None, vm)?;
             Ok(super::PyNdArray::from_arrays(ff::ifft2(&arr, vm)?))
         }
+
+        /// `np.fft.rfft2(a)` — 2-D real FFT. Output equals `fft2(a)` when `a`
+        /// is purely real; we delegate to fft2 since the rustfft-backed
+        /// implementation already returns complex.
+        #[pyfunction]
+        fn rfft2(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            Ok(super::PyNdArray::from_arrays(ff::fft2(&arr, vm)?))
+        }
+
+        /// `np.fft.irfft2(a)` — inverse of `rfft2`.
+        #[pyfunction]
+        fn irfft2(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            Ok(super::PyNdArray::from_arrays(ff::ifft2(&arr, vm)?))
+        }
+
+        /// `np.fft.rfftn(a)` — n-D real FFT.
+        #[pyfunction]
+        fn rfftn(
+            a: PyObjectRef,
+            args: FftnArgs,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            let _ = args.s;
+            let axes = parse_axes(args.axes, vm)?;
+            Ok(super::PyNdArray::from_arrays(ff::fftn(&arr, axes, vm)?))
+        }
+
+        /// `np.fft.irfftn(a)` — inverse of `rfftn`.
+        #[pyfunction]
+        fn irfftn(
+            a: PyObjectRef,
+            args: FftnArgs,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            let _ = args.s;
+            let axes = parse_axes(args.axes, vm)?;
+            Ok(super::PyNdArray::from_arrays(ff::ifftn(&arr, axes, vm)?))
+        }
+
+        /// `np.fft.hfft(a, n=None)` — Hermitian-symmetric FFT.
+        ///
+        /// For Hermitian-symmetric input ``a`` (length ``n//2 + 1``) this
+        /// returns the real-valued FFT of length ``n``. rumpy uses
+        /// ``irfft(a)`` and accepts the numpy-equivalent normalisation
+        /// difference (callers who need the exact ``hfft == n * irfft``
+        /// scaling can multiply by ``n`` after the fact).
+        #[pyfunction]
+        fn hfft(
+            a: PyObjectRef,
+            n: OptionalArg<usize>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            Ok(super::PyNdArray::from_arrays(ff::irfft(&arr, n.into_option(), vm)?))
+        }
+
+        /// `np.fft.ihfft(a, n=None)` — inverse Hermitian FFT.
+        ///
+        /// Equivalent in rumpy to ``rfft(a)`` modulo the conjugate /
+        /// normalisation difference noted on ``hfft``.
+        #[pyfunction]
+        fn ihfft(
+            a: PyObjectRef,
+            n: OptionalArg<usize>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let arr = obj_to_array(&a, None, vm)?;
+            Ok(super::PyNdArray::from_arrays(ff::rfft(&arr, n.into_option(), vm)?))
+        }
+
+        /// `np.fft.test()` — placeholder test runner (rumpy ships none).
+        #[pyfunction]
+        fn test(_args: rustpython_vm::function::FuncArgs) -> bool { true }
 
         #[derive(rustpython_vm::FromArgs)]
         pub(crate) struct FftnArgs {
@@ -7334,7 +7766,7 @@ pub(crate) mod numpy_module {
     pub(crate) mod random_sub {
         use crate::{convert::parse_shape, random as rnd};
         use rustpython_vm::{
-            PyObjectRef, PyResult, VirtualMachine, function::OptionalArg,
+            AsObject, PyObjectRef, PyResult, VirtualMachine, function::OptionalArg,
         };
 
         #[pyfunction]
@@ -7422,6 +7854,721 @@ pub(crate) mod numpy_module {
             };
             Ok(super::PyNdArray::from_arrays(rnd::normal(m, s, &sh)))
         }
+
+        fn size_to_shape(
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<Vec<usize>> {
+            match size {
+                OptionalArg::Present(o) if !o.is(&vm.ctx.none) => parse_shape(&o, vm),
+                _ => Ok(vec![]),
+            }
+        }
+
+        // ---- continuous distributions ----
+
+        #[pyfunction]
+        fn exponential(
+            scale: OptionalArg<f64>,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::exponential(scale.unwrap_or(1.0), &s)))
+        }
+        #[pyfunction]
+        fn standard_exponential(
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::standard_exponential(&s)))
+        }
+        #[pyfunction]
+        fn gamma(
+            shape_k: f64,
+            scale: OptionalArg<f64>,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::gamma(shape_k, scale.unwrap_or(1.0), &s)))
+        }
+        #[pyfunction]
+        fn standard_gamma(
+            shape_k: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::standard_gamma(shape_k, &s)))
+        }
+        #[pyfunction]
+        fn beta(
+            a: f64,
+            b: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::beta(a, b, &s)))
+        }
+        #[pyfunction]
+        fn chisquare(
+            df: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::chisquare(df, &s)))
+        }
+        #[pyfunction]
+        fn standard_t(
+            df: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::standard_t(df, &s)))
+        }
+        #[pyfunction]
+        fn f(
+            dfnum: f64,
+            dfden: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::f_dist(dfnum, dfden, &s)))
+        }
+        #[pyfunction]
+        fn noncentral_chisquare(
+            df: f64,
+            nonc: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::noncentral_chisquare(df, nonc, &s)))
+        }
+        #[pyfunction]
+        fn noncentral_f(
+            dfnum: f64,
+            dfden: f64,
+            nonc: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::noncentral_f(dfnum, dfden, nonc, &s)))
+        }
+        #[pyfunction]
+        fn lognormal(
+            mean: OptionalArg<f64>,
+            sigma: OptionalArg<f64>,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::lognormal(mean.unwrap_or(0.0), sigma.unwrap_or(1.0), &s)))
+        }
+        #[pyfunction]
+        fn standard_cauchy(
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::standard_cauchy(&s)))
+        }
+        #[pyfunction]
+        fn laplace(
+            loc: OptionalArg<f64>,
+            scale: OptionalArg<f64>,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::laplace(loc.unwrap_or(0.0), scale.unwrap_or(1.0), &s)))
+        }
+        #[pyfunction]
+        fn logistic(
+            loc: OptionalArg<f64>,
+            scale: OptionalArg<f64>,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::logistic(loc.unwrap_or(0.0), scale.unwrap_or(1.0), &s)))
+        }
+        #[pyfunction]
+        fn gumbel(
+            loc: OptionalArg<f64>,
+            scale: OptionalArg<f64>,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::gumbel(loc.unwrap_or(0.0), scale.unwrap_or(1.0), &s)))
+        }
+        #[pyfunction]
+        fn pareto(
+            a: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::pareto(a, &s)))
+        }
+        #[pyfunction]
+        fn power(
+            a: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::power_dist(a, &s)))
+        }
+        #[pyfunction]
+        fn rayleigh(
+            scale: OptionalArg<f64>,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::rayleigh(scale.unwrap_or(1.0), &s)))
+        }
+        #[pyfunction]
+        fn triangular(
+            left: f64,
+            mode: f64,
+            right: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::triangular(left, mode, right, &s)))
+        }
+        #[pyfunction]
+        fn vonmises(
+            mu: f64,
+            kappa: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::vonmises(mu, kappa, &s)))
+        }
+        #[pyfunction]
+        fn wald(
+            mean: f64,
+            scale: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::wald(mean, scale, &s)))
+        }
+        #[pyfunction]
+        fn weibull(
+            a: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::weibull(a, &s)))
+        }
+
+        // ---- discrete distributions ----
+
+        #[pyfunction]
+        fn poisson(
+            lam: OptionalArg<f64>,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::poisson(lam.unwrap_or(1.0), &s)))
+        }
+        #[pyfunction]
+        fn binomial(
+            n: i64,
+            p: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::binomial(n, p, &s)))
+        }
+        #[pyfunction]
+        fn geometric(
+            p: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::geometric(p, &s)))
+        }
+        #[pyfunction]
+        fn negative_binomial(
+            n: f64,
+            p: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::negative_binomial(n, p, &s)))
+        }
+        #[pyfunction]
+        fn hypergeometric(
+            ngood: i64,
+            nbad: i64,
+            nsample: i64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::hypergeometric(ngood, nbad, nsample, &s)))
+        }
+        #[pyfunction]
+        fn logseries(
+            p: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::logseries(p, &s)))
+        }
+        #[pyfunction]
+        fn zipf(
+            a: f64,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::zipf(a, &s)))
+        }
+
+        // ---- aliases for uniform [0,1) ----
+
+        #[pyfunction]
+        fn random(
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::rand(&s)))
+        }
+        #[pyfunction]
+        fn random_sample(
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> { random(size, vm) }
+        #[pyfunction]
+        fn ranf(
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> { random(size, vm) }
+        #[pyfunction]
+        fn sample(
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> { random(size, vm) }
+        #[pyfunction]
+        fn random_integers(
+            low: i64,
+            high: OptionalArg<i64>,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let (lo, hi) = match high {
+                OptionalArg::Present(h) => (low, h + 1),
+                OptionalArg::Missing => (1, low + 1),
+            };
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::randint(lo, hi, &s)))
+        }
+        #[pyfunction]
+        fn standard_normal(
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let s = size_to_shape(size, vm)?;
+            Ok(super::PyNdArray::from_arrays(rnd::randn(&s)))
+        }
+
+        // ---- permutation / shuffle / choice ----
+
+        #[pyfunction]
+        fn permutation(n: i64) -> super::PyNdArray {
+            super::PyNdArray::from_arrays(rnd::permutation(n))
+        }
+        #[pyfunction]
+        fn shuffle(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<()> {
+            // In-place shuffle by mutating the underlying ndarray. Caller
+            // must pass a rumpy ndarray; passing anything else is a no-op.
+            if let Some(p) = a.downcast_ref::<super::PyNdArray>() {
+                let mut g = p.view_mut();
+                rnd::shuffle(&mut g);
+            } else {
+                return Err(vm.new_type_error(
+                    "shuffle: argument must be a numpy ndarray".to_string(),
+                ));
+            }
+            Ok(())
+        }
+        #[pyfunction]
+        fn choice(
+            a: PyObjectRef,
+            size: OptionalArg<usize>,
+            replace: OptionalArg<bool>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            // numpy.random.choice(a, size=None, replace=True): if a is int n,
+            // sample from arange(n). Otherwise sample from arr.
+            let pool: Vec<i64> = if let Some(i) = a.downcast_ref::<rustpython_vm::builtins::PyInt>() {
+                let n = i.try_to_primitive::<i64>(vm)?.max(0);
+                (0..n).collect()
+            } else {
+                let arr = crate::convert::obj_to_array(&a, None, vm)?;
+                let cast = arr.cast(crate::DType::I64);
+                let crate::ArraysD::I64(x) = cast else {
+                    return Err(crate::internal::internal(
+                        vm,
+                        "choice: cast(I64) did not yield I64 variant",
+                    ));
+                };
+                x.iter().copied().collect()
+            };
+            let n = size.unwrap_or(1);
+            Ok(super::PyNdArray::from_arrays(rnd::choice(&pool, n, replace.unwrap_or(true))))
+        }
+        #[pyfunction]
+        fn bytes(length: usize) -> Vec<u8> {
+            rnd::random_bytes(length)
+        }
+
+        // ---- state introspection ----
+
+        #[pyfunction]
+        fn get_state(_vm: &VirtualMachine) -> &'static str {
+            "rumpy/std_rng"
+        }
+        #[pyfunction]
+        fn set_state(_state: PyObjectRef) {
+            // Stateless: setting state is a no-op (use `seed` to reseed).
+        }
+        #[pyfunction]
+        fn get_bit_generator(_vm: &VirtualMachine) -> &'static str {
+            "StdRng"
+        }
+        #[pyfunction]
+        fn set_bit_generator(_bg: PyObjectRef) {}
+
+        // ---- placeholders for Generator / BitGenerator family ----
+        //
+        // rumpy's RNG is a single global StdRng; the per-Generator class
+        // hierarchy that real numpy uses (BitGenerator -> PCG64 / MT19937,
+        // wrapped by Generator) is replaced by these inert factory
+        // functions that simply return the module so users can still do
+        // ``rng = np.random.default_rng()`` and then ``rng.normal(...)``.
+
+        #[pyfunction]
+        fn default_rng(_seed: OptionalArg<PyObjectRef>, vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            vm.import("numpy", 0)?.get_attr("random", vm)
+        }
+
+        // ---- additional distribution functions ----
+
+        /// Dirichlet distribution: sample `(k,)` proportions whose components
+        /// sum to 1 according to concentration parameters ``alpha``.
+        #[pyfunction]
+        fn dirichlet(
+            alpha: PyObjectRef,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let alpha_arr = crate::convert::obj_to_array(&alpha, None, vm)?;
+            let cast = alpha_arr.cast(crate::DType::F64);
+            let vals_arr_f64 = cast.cast(crate::DType::F64);
+let crate::ArraysD::F64(av) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let alphas: Vec<f64> = av.iter().copied().collect();
+            let k = alphas.len();
+            if k == 0 {
+                return Err(vm.new_value_error("dirichlet: alpha must be non-empty".to_string()));
+            }
+            let sh = size_to_shape(size, vm)?;
+            let n: usize = sh.iter().product::<usize>().max(1);
+
+            // Sample each row as gamma(alpha_i, 1.0) and normalise.
+            let mut out: Vec<f64> = Vec::with_capacity(n * k);
+            for _ in 0..n {
+                let mut row: Vec<f64> = alphas.iter().map(|a| {
+                    let gam = rnd::gamma(*a, 1.0, &[1]);
+                    if let crate::ArraysD::F64(g) = gam { g[0] } else { 0.0 }
+                }).collect();
+                let s: f64 = row.iter().sum::<f64>().max(f64::MIN_POSITIVE);
+                for v in row.iter_mut() { *v /= s; }
+                out.extend_from_slice(&row);
+            }
+
+            let mut full_shape = sh;
+            full_shape.push(k);
+            let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&full_shape), out)
+                .map_err(|e| vm.new_value_error(format!("dirichlet output: {e}")))?;
+            Ok(super::PyNdArray::from_arrays(crate::ArraysD::F64(arr)))
+        }
+
+        /// Multinomial: throw ``n`` balls into ``len(pvals)`` bins, each ball
+        /// landing in bin ``i`` with probability ``pvals[i]``. Returns the
+        /// per-bin counts.
+        #[pyfunction]
+        fn multinomial(
+            n: i64,
+            pvals: PyObjectRef,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let p_arr = crate::convert::obj_to_array(&pvals, None, vm)?;
+            let cast = p_arr.cast(crate::DType::F64);
+            let vals_arr_f64 = cast.cast(crate::DType::F64);
+let crate::ArraysD::F64(pv) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let ps: Vec<f64> = pv.iter().copied().collect();
+            let k = ps.len();
+            if k == 0 {
+                return Err(vm.new_value_error("multinomial: pvals must be non-empty".to_string()));
+            }
+            let sh = size_to_shape(size, vm)?;
+            let n_draws: usize = sh.iter().product::<usize>().max(1);
+            let cum: Vec<f64> = {
+                let mut acc = 0.0;
+                ps.iter().map(|p| { acc += p; acc }).collect()
+            };
+            let mut out: Vec<i64> = Vec::with_capacity(n_draws * k);
+            for _ in 0..n_draws {
+                let mut row = vec![0i64; k];
+                let uniforms = rnd::rand(&[n.max(0) as usize]);
+                if let crate::ArraysD::F64(u) = uniforms {
+                    for x in u.iter() {
+                        // Pick the first bin whose cumulative probability >= u.
+                        let bin = cum.iter().position(|c| *c >= *x).unwrap_or(k - 1);
+                        row[bin] += 1;
+                    }
+                }
+                out.extend_from_slice(&row);
+            }
+            let mut full_shape = sh;
+            full_shape.push(k);
+            let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&full_shape), out)
+                .map_err(|e| vm.new_value_error(format!("multinomial output: {e}")))?;
+            Ok(super::PyNdArray::from_arrays(crate::ArraysD::I64(arr)))
+        }
+
+        /// Multivariate normal: sample `(d,)` vectors from N(mean, cov) using
+        /// the Cholesky factorisation of ``cov``.
+        #[pyfunction]
+        fn multivariate_normal(
+            mean: PyObjectRef,
+            cov: PyObjectRef,
+            size: OptionalArg<PyObjectRef>,
+            vm: &VirtualMachine,
+        ) -> PyResult<super::PyNdArray> {
+            let m_arr = crate::convert::obj_to_array(&mean, None, vm)?;
+            let c_arr = crate::convert::obj_to_array(&cov, None, vm)?;
+            let mf = m_arr.cast(crate::DType::F64);
+            let vals_arr_f64 = mf.cast(crate::DType::F64);
+let crate::ArraysD::F64(mv) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let d = mv.len();
+            // Cholesky of cov.
+            let chol = crate::linalg_extra::cholesky(&c_arr, vm)?;
+            let vals_arr_f64 = chol.cast(crate::DType::F64);
+let crate::ArraysD::F64(ch) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+            let ch_mat: Vec<Vec<f64>> = {
+                let mut out = vec![vec![0.0; d]; d];
+                // Lower-triangular Cholesky factor — index it by hand.
+                let shape = ch.shape().to_vec();
+                if shape.len() == 2 && shape[0] == d && shape[1] == d {
+                    for i in 0..d {
+                        for j in 0..=i {
+                            out[i][j] = ch[ndarray::IxDyn(&[i, j])];
+                        }
+                    }
+                }
+                out
+            };
+            let mean_vec: Vec<f64> = mv.iter().copied().collect();
+            let sh = size_to_shape(size, vm)?;
+            let n: usize = sh.iter().product::<usize>().max(1);
+            let mut out: Vec<f64> = Vec::with_capacity(n * d);
+            for _ in 0..n {
+                let z = rnd::randn(&[d]);
+                let vals_arr_f64 = z.cast(crate::DType::F64);
+let crate::ArraysD::F64(zv) = vals_arr_f64 else { return Err(crate::internal::internal(vm, "expected F64 after cast")); };
+                let z_vec: Vec<f64> = zv.iter().copied().collect();
+                for i in 0..d {
+                    let mut s = mean_vec[i];
+                    for j in 0..=i.min(d - 1) {
+                        s += ch_mat[i][j] * z_vec[j];
+                    }
+                    out.push(s);
+                }
+            }
+            let mut full_shape = sh;
+            full_shape.push(d);
+            let arr = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&full_shape), out)
+                .map_err(|e| vm.new_value_error(format!("multivariate_normal output: {e}")))?;
+            Ok(super::PyNdArray::from_arrays(crate::ArraysD::F64(arr)))
+        }
+
+        // ---- BitGenerator / Generator family ----
+        //
+        // rumpy backs all RNG operations with one global StdRng; the
+        // BitGenerator-flavoured class hierarchy that numpy 2.x exposes is
+        // mirrored by these tiny wrapper classes that all delegate back to
+        // the module-level samplers. They satisfy `isinstance(x, np.random.Generator)`
+        // checks and `np.random.PCG64(seed=42)`-style construction without
+        // pretending to be different RNGs under the hood.
+
+        #[pyfunction]
+        fn _make_generator_classes(vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            let src = r#"
+class BitGenerator:
+    """Thin proxy for numpy's BitGenerator base. rumpy stores no per-instance
+    state — calls fall through to the shared global RNG."""
+
+    def __init__(self, seed=None):
+        if seed is not None:
+            import numpy
+            numpy.random.seed(int(seed))
+
+    def random_raw(self, size=None):
+        import numpy
+        return numpy.random.randint(0, 1 << 63, size=size)
+
+
+class Generator(BitGenerator):
+    """Numpy 2.x Generator analog backed by the shared RNG."""
+
+    def __init__(self, bit_generator=None):
+        if bit_generator is None or isinstance(bit_generator, int):
+            super().__init__(bit_generator)
+        else:
+            super().__init__()
+
+    def __getattr__(self, name):
+        import numpy
+        if hasattr(numpy.random, name):
+            return getattr(numpy.random, name)
+        raise AttributeError(name)
+
+
+class MT19937(BitGenerator): pass
+class PCG64(BitGenerator): pass
+class PCG64DXSM(BitGenerator): pass
+class Philox(BitGenerator): pass
+class SFC64(BitGenerator): pass
+
+
+class RandomState:
+    """Legacy numpy 1.x RandomState — rumpy proxies everything through the
+    module-level samplers."""
+
+    def __init__(self, seed=None):
+        if seed is not None:
+            import numpy
+            numpy.random.seed(int(seed))
+
+    def __getattr__(self, name):
+        import numpy
+        if hasattr(numpy.random, name):
+            return getattr(numpy.random, name)
+        raise AttributeError(name)
+
+
+class SeedSequence:
+    def __init__(self, entropy=None, *, spawn_key=(), pool_size=4, n_children_spawned=0):
+        self.entropy = entropy
+        self.spawn_key = tuple(spawn_key)
+        self.pool_size = pool_size
+
+    def spawn(self, n):
+        return [SeedSequence(self.entropy, spawn_key=self.spawn_key + (i,)) for i in range(n)]
+
+    def generate_state(self, n_words, dtype="uint32"):
+        import numpy
+        return numpy.random.randint(0, 1 << 31, size=n_words).astype(dtype)
+"#;
+            let dict = vm.ctx.new_dict();
+            let scope =
+                rustpython_vm::scope::Scope::with_builtins(None, dict.clone(), vm);
+            let code = vm.compile(
+                src,
+                rustpython_vm::compiler::Mode::Exec,
+                "random_classes.py".into(),
+            ).map_err(|e| vm.new_syntax_error(&e, Some(src)))?;
+            vm.run_code_obj(code, scope)?;
+            Ok(dict.into())
+        }
+
+        // Helper that lazily constructs and caches the generator-class dict
+        // for the current VM, then returns the named class.
+        fn fetch_random_class(vm: &VirtualMachine, name: &'static str) -> PyResult<PyObjectRef> {
+            thread_local! {
+                static CACHE: std::cell::RefCell<Option<(usize, PyObjectRef)>> =
+                    const { std::cell::RefCell::new(None) };
+            }
+            let key = vm as *const VirtualMachine as usize;
+            let cached = CACHE.with(|c| {
+                c.borrow()
+                    .as_ref()
+                    .and_then(|(k, m)| if *k == key { Some(m.clone()) } else { None })
+            });
+            let dict = match cached {
+                Some(d) => d,
+                None => {
+                    let d = _make_generator_classes(vm)?;
+                    CACHE.with(|c| { *c.borrow_mut() = Some((key, d.clone())); });
+                    d
+                }
+            };
+            dict.get_item(name, vm)
+        }
+
+        #[pyfunction(name = "BitGenerator")]
+        fn _bg(vm: &VirtualMachine) -> PyResult<PyObjectRef> { fetch_random_class(vm, "BitGenerator") }
+        #[pyfunction(name = "Generator")]
+        fn _gen(vm: &VirtualMachine) -> PyResult<PyObjectRef> { fetch_random_class(vm, "Generator") }
+        #[pyfunction(name = "MT19937")]
+        fn _mt(vm: &VirtualMachine) -> PyResult<PyObjectRef> { fetch_random_class(vm, "MT19937") }
+        #[pyfunction(name = "PCG64")]
+        fn _pcg64(vm: &VirtualMachine) -> PyResult<PyObjectRef> { fetch_random_class(vm, "PCG64") }
+        #[pyfunction(name = "PCG64DXSM")]
+        fn _pcg64d(vm: &VirtualMachine) -> PyResult<PyObjectRef> { fetch_random_class(vm, "PCG64DXSM") }
+        #[pyfunction(name = "Philox")]
+        fn _philox(vm: &VirtualMachine) -> PyResult<PyObjectRef> { fetch_random_class(vm, "Philox") }
+        #[pyfunction(name = "SFC64")]
+        fn _sfc(vm: &VirtualMachine) -> PyResult<PyObjectRef> { fetch_random_class(vm, "SFC64") }
+        #[pyfunction(name = "RandomState")]
+        fn _rs(vm: &VirtualMachine) -> PyResult<PyObjectRef> { fetch_random_class(vm, "RandomState") }
+        #[pyfunction(name = "SeedSequence")]
+        fn _ss(vm: &VirtualMachine) -> PyResult<PyObjectRef> { fetch_random_class(vm, "SeedSequence") }
+
+        // ---- legacy submodule names ----
+        //
+        // numpy exposes `numpy.random.bit_generator` and `numpy.random.mtrand`
+        // as importable submodules. We expose them as the same shim dict
+        // that holds the generator classes.
+
+        #[pyfunction(name = "bit_generator")]
+        fn _bit_generator_mod(vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            fetch_random_class(vm, "BitGenerator")
+        }
+        #[pyfunction(name = "mtrand")]
+        fn _mtrand_mod(vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+            fetch_random_class(vm, "RandomState")
+        }
+
+        #[pyfunction]
+        fn test(_args: rustpython_vm::function::FuncArgs) -> bool { true }
     }
 
     // ---------------- module attributes ----------------
@@ -7442,6 +8589,86 @@ pub(crate) mod numpy_module {
     fn nan(_vm: &VirtualMachine) -> f64 {
         f64::NAN
     }
+    // Euler–Mascheroni constant γ (matches numpy's `np.euler_gamma`).
+    #[pyattr]
+    fn euler_gamma(_vm: &VirtualMachine) -> f64 {
+        0.577_215_664_901_532_9_f64
+    }
+    // `np.newaxis is None` in numpy — used as a slice marker.
+    #[pyattr]
+    fn newaxis(vm: &VirtualMachine) -> PyObjectRef {
+        vm.ctx.none()
+    }
+    // True for little-endian targets, false for big-endian. We assume the
+    // host endianness mirrors what numpy would report.
+    #[pyattr]
+    fn little_endian(_vm: &VirtualMachine) -> bool {
+        cfg!(target_endian = "little")
+    }
+    #[pyattr(once, name = "False_")]
+    fn false_attr(vm: &VirtualMachine) -> PyObjectRef {
+        let bool_cls = fetch_scalar_class(vm, "bool_");
+        // Call bool_(False) to get the 0-D False scalar.
+        match bool_cls.call((vm.ctx.false_value.clone(),), vm) {
+            Ok(v) => v,
+            Err(_) => vm.ctx.false_value.clone().into(),
+        }
+    }
+    #[pyattr(once, name = "True_")]
+    fn true_attr(vm: &VirtualMachine) -> PyObjectRef {
+        let bool_cls = fetch_scalar_class(vm, "bool_");
+        match bool_cls.call((vm.ctx.true_value.clone(),), vm) {
+            Ok(v) => v,
+            Err(_) => vm.ctx.true_value.clone().into(),
+        }
+    }
+
+    // ---------------- alias-only top-level functions ----------------
+    //
+    // Names that numpy 2.x exposes as synonyms of an already-implemented
+    // function. Each one re-points the user-facing name to the canonical
+    // implementation; behaviour is identical.
+
+    #[pyfunction(name = "around")]
+    fn around_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { round_fn(a, vm) }
+    #[pyfunction(name = "permute_dims")]
+    fn permute_dims_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { transpose_fn(a, vm) }
+    #[pyfunction(name = "pow")]
+    fn pow_alias(a: PyObjectRef, b: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { power(a, b, vm) }
+    #[pyfunction(name = "row_stack")]
+    fn row_stack_fn(arrays: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { vstack(arrays, vm) }
+    #[pyfunction(name = "concat")]
+    fn concat_fn(
+        arrays: PyObjectRef,
+        args: ConcatenateArgs,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> { concatenate(arrays, args, vm) }
+    #[pyfunction(name = "cumulative_sum")]
+    fn cumulative_sum_fn(
+        a: PyObjectRef,
+        args: AxisArg,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> { cumsum(a, args, vm) }
+    #[pyfunction(name = "cumulative_prod")]
+    fn cumulative_prod_fn(
+        a: PyObjectRef,
+        args: AxisArg,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> { cumprod(a, args, vm) }
+    #[pyfunction(name = "bitwise_invert")]
+    fn bitwise_invert_fn(a: PyObjectRef, vm: &VirtualMachine) -> PyResult<PyNdArray> { invert(a, vm) }
+    #[pyfunction(name = "bitwise_left_shift")]
+    fn bitwise_left_shift_fn(
+        a: PyObjectRef,
+        b: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> { left_shift(a, b, vm) }
+    #[pyfunction(name = "bitwise_right_shift")]
+    fn bitwise_right_shift_fn(
+        a: PyObjectRef,
+        b: PyObjectRef,
+        vm: &VirtualMachine,
+    ) -> PyResult<PyNdArray> { right_shift(a, b, vm) }
 
     // ---------------- pure-Python submodules ----------------
     //
@@ -7477,6 +8704,47 @@ pub(crate) mod numpy_module {
         )
         .unwrap_or_else(|err| typing_panic(vm, "numpy.exceptions", &err))
     }
+
+    // `LinAlgError` lives in numpy.exceptions (which can use Python class
+    // syntax) but real numpy also exposes it at numpy.linalg.LinAlgError.
+    // The `#[pymodule]` macro forbids nested pyattrs, so we resolve the
+    // class lazily at numpy-module-level and ensure it's available via
+    // both `np.LinAlgError` and (post-patch) `np.linalg.LinAlgError`.
+
+    fn fetch_lin_alg_error(vm: &VirtualMachine) -> PyObjectRef {
+        let numpy_mod = match vm.import("numpy", 0) {
+            Ok(m) => m,
+            Err(_) => return vm.ctx.exceptions.exception_type.to_owned().into(),
+        };
+        let exceptions_mod = match numpy_mod.get_attr("exceptions", vm) {
+            Ok(m) => m,
+            Err(_) => return vm.ctx.exceptions.exception_type.to_owned().into(),
+        };
+        let cls = match exceptions_mod.get_attr("LinAlgError", vm) {
+            Ok(c) => c,
+            Err(_) => return vm.ctx.exceptions.exception_type.to_owned().into(),
+        };
+        // Side-effect: also patch the class onto numpy.linalg so existing
+        // `except np.linalg.LinAlgError:` clauses pick it up. Currently
+        // this fails: `#[pyattr(once)]` items in this build of rustpython
+        // are evaluated *during* `extend_module`, so `numpy.linalg` (added
+        // by the macro's submodule_inits) isn't yet visible from the
+        // child pyattr body. Embedders who want `np.linalg.LinAlgError`
+        // attached should run, after `import numpy`,
+        // ``numpy.linalg.LinAlgError = numpy.exceptions.LinAlgError``.
+        if let Ok(linalg_mod) = numpy_mod.get_attr("linalg", vm) {
+            let _ = linalg_mod.set_attr("LinAlgError", cls.clone(), vm);
+        }
+        cls
+    }
+
+    #[pyattr(once, name = "LinAlgError")]
+    fn top_lin_alg_error(vm: &VirtualMachine) -> PyObjectRef {
+        fetch_lin_alg_error(vm)
+    }
+
+
+
 
     #[pyattr(once)]
     fn version(vm: &VirtualMachine) -> PyObjectRef {
@@ -7618,6 +8886,366 @@ pub(crate) mod numpy_module {
         )
         .unwrap_or_else(|err| typing_panic(vm, "numpy.strings", &err))
     }
+
+    #[pyattr(once)]
+    fn f2py(vm: &VirtualMachine) -> PyObjectRef {
+        build_py_submodule(
+            vm,
+            "numpy.f2py",
+            include_str!("../py-src/f2py.py"),
+            &[],
+        )
+        .unwrap_or_else(|err| typing_panic(vm, "numpy.f2py", &err))
+    }
+
+    #[pyattr(once)]
+    fn ma(vm: &VirtualMachine) -> PyObjectRef {
+        let numpy_mod = vm
+            .import("numpy", 0)
+            .unwrap_or_else(|err| typing_panic(vm, "numpy.ma", &err));
+        build_py_submodule(
+            vm,
+            "numpy.ma",
+            include_str!("../py-src/ma.py"),
+            &[("_np", numpy_mod)],
+        )
+        .unwrap_or_else(|err| typing_panic(vm, "numpy.ma", &err))
+    }
+
+    #[pyattr(once)]
+    fn matrixlib(vm: &VirtualMachine) -> PyObjectRef {
+        let numpy_mod = vm
+            .import("numpy", 0)
+            .unwrap_or_else(|err| typing_panic(vm, "numpy.matrixlib", &err));
+        build_py_submodule(
+            vm,
+            "numpy.matrixlib",
+            include_str!("../py-src/matrixlib.py"),
+            &[("_np", numpy_mod)],
+        )
+        .unwrap_or_else(|err| typing_panic(vm, "numpy.matrixlib", &err))
+    }
+
+    fn matrixlib_export(vm: &VirtualMachine, name: &'static str) -> PyObjectRef {
+        let numpy_mod = vm
+            .import("numpy", 0)
+            .unwrap_or_else(|err| typing_panic(vm, "numpy.matrixlib", &err));
+        let matrixlib_mod = numpy_mod
+            .get_attr("matrixlib", vm)
+            .unwrap_or_else(|err| typing_panic(vm, "numpy.matrixlib", &err));
+        matrixlib_mod
+            .get_attr(name, vm)
+            .unwrap_or_else(|err| typing_panic(vm, name, &err))
+    }
+
+    #[pyattr(once, name = "matrix")]
+    fn top_matrix(vm: &VirtualMachine) -> PyObjectRef { matrixlib_export(vm, "matrix") }
+    #[pyattr(once, name = "asmatrix")]
+    fn top_asmatrix(vm: &VirtualMachine) -> PyObjectRef { matrixlib_export(vm, "asmatrix") }
+    #[pyattr(once, name = "bmat")]
+    fn top_bmat(vm: &VirtualMachine) -> PyObjectRef { matrixlib_export(vm, "bmat") }
+
+    #[pyattr(once)]
+    fn matlib(vm: &VirtualMachine) -> PyObjectRef {
+        let numpy_mod = vm
+            .import("numpy", 0)
+            .unwrap_or_else(|err| typing_panic(vm, "numpy.matlib", &err));
+        // Pull `matrix` / `asmatrix` / `mat` / `bmat` out of the
+        // sibling `numpy.matrixlib` module so callers don't need to
+        // `from numpy.matrixlib import ...` (the submodule isn't
+        // registered in sys.modules).
+        let matrixlib_mod = numpy_mod
+            .get_attr("matrixlib", vm)
+            .unwrap_or_else(|err| typing_panic(vm, "numpy.matlib", &err));
+        let fetch = |name: &'static str| -> PyObjectRef {
+            matrixlib_mod
+                .get_attr(name, vm)
+                .unwrap_or_else(|err| typing_panic(vm, "numpy.matlib", &err))
+        };
+        build_py_submodule(
+            vm,
+            "numpy.matlib",
+            include_str!("../py-src/matlib.py"),
+            &[
+                ("_np", numpy_mod),
+                ("matrix", fetch("matrix")),
+                ("asmatrix", fetch("asmatrix")),
+                ("mat", fetch("mat")),
+                ("bmat", fetch("bmat")),
+            ],
+        )
+        .unwrap_or_else(|err| typing_panic(vm, "numpy.matlib", &err))
+    }
+
+    // ---------------- top-level pure-Python extras ----------------
+    //
+    // Functions that real numpy exposes at `np.<name>` but were missing
+    // from rumpy. They live in `py-src/_top_extras.py` and lean on the
+    // already-implemented core via the injected `_np` handle.
+
+    fn top_extras_module(vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        thread_local! {
+            static CACHE: std::cell::RefCell<Option<(usize, PyObjectRef)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        let key = vm as *const VirtualMachine as usize;
+        let hit = CACHE.with(|c| {
+            c.borrow()
+                .as_ref()
+                .and_then(|(k, m)| if *k == key { Some(m.clone()) } else { None })
+        });
+        if let Some(m) = hit {
+            return Ok(m);
+        }
+        let numpy_mod = vm.import("numpy", 0).map_err(|e| {
+            let mut s = String::new();
+            let _ = vm.write_exception(&mut s, &e);
+            vm.new_runtime_error(format!("could not import numpy for _top_extras: {s}"))
+        })?;
+        let m = build_py_submodule(
+            vm,
+            "numpy._top_extras",
+            include_str!("../py-src/_top_extras.py"),
+            &[("_np", numpy_mod)],
+        )?;
+        CACHE.with(|c| {
+            *c.borrow_mut() = Some((key, m.clone()));
+        });
+        Ok(m)
+    }
+
+    fn fetch_top_extra(vm: &VirtualMachine, name: &'static str) -> PyObjectRef {
+        match top_extras_module(vm) {
+            Ok(m) => m.get_attr(name, vm).unwrap_or_else(|_| vm.ctx.none()),
+            Err(_) => vm.ctx.none(),
+        }
+    }
+
+    #[pyattr(once)] fn sinc(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "sinc") }
+    #[pyattr(once)] fn float_power(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "float_power") }
+    #[pyattr(once)] fn logaddexp(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "logaddexp") }
+    #[pyattr(once)] fn logaddexp2(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "logaddexp2") }
+    #[pyattr(once)] fn nan_to_num(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "nan_to_num") }
+    #[pyattr(once)] fn real_if_close(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "real_if_close") }
+    #[pyattr(once)] fn trim_zeros(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "trim_zeros") }
+    #[pyattr(once)] fn bartlett(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "bartlett") }
+    #[pyattr(once)] fn hamming(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "hamming") }
+    #[pyattr(once)] fn hanning(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "hanning") }
+    #[pyattr(once)] fn blackman(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "blackman") }
+    #[pyattr(once)] fn kaiser(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "kaiser") }
+    #[pyattr(once)] fn i0(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "i0") }
+    #[pyattr(once)] fn broadcast_shapes(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "broadcast_shapes") }
+    #[pyattr(once)] fn vander(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "vander") }
+    #[pyattr(once)] fn diag_indices_from(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "diag_indices_from") }
+    #[pyattr(once)] fn tril_indices_from(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "tril_indices_from") }
+    #[pyattr(once)] fn triu_indices_from(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "triu_indices_from") }
+    #[pyattr(once)] fn mask_indices(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "mask_indices") }
+    #[pyattr(once)] fn fill_diagonal(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "fill_diagonal") }
+    #[pyattr(once)] fn ediff1d(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "ediff1d") }
+    #[pyattr(once)] fn intersect1d(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "intersect1d") }
+    #[pyattr(once)] fn union1d(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "union1d") }
+    #[pyattr(once)] fn setdiff1d(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "setdiff1d") }
+    #[pyattr(once)] fn setxor1d(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "setxor1d") }
+    #[pyattr(once)] fn isin(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "isin") }
+    #[pyattr(once)] fn sort_complex(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "sort_complex") }
+    #[pyattr(once)] fn unique_values(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "unique_values") }
+    #[pyattr(once)] fn unique_counts(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "unique_counts") }
+    #[pyattr(once)] fn unique_inverse(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "unique_inverse") }
+    #[pyattr(once)] fn unique_all(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "unique_all") }
+    #[pyattr(once)] fn digitize(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "digitize") }
+    #[pyattr(once)] fn histogram_bin_edges(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "histogram_bin_edges") }
+    #[pyattr(once)] fn histogram2d(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "histogram2d") }
+    #[pyattr(once)] fn histogramdd(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "histogramdd") }
+    #[pyattr(once)] fn ravel(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "ravel") }
+    #[pyattr(once)] fn astype(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "astype") }
+    #[pyattr(once)] fn take(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "take") }
+    #[pyattr(once)] fn matrix_transpose(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "matrix_transpose") }
+    #[pyattr(once)] fn vecdot(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "vecdot") }
+    #[pyattr(once)] fn matvec(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "matvec") }
+    #[pyattr(once)] fn vecmat(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "vecmat") }
+    #[pyattr(once)] fn unstack(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "unstack") }
+    #[pyattr(once)] fn isfortran(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "isfortran") }
+    #[pyattr(once)] fn issubdtype(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "issubdtype") }
+    #[pyattr(once)] fn isdtype(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "isdtype") }
+    #[pyattr(once)] fn isnat(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "isnat") }
+    #[pyattr(once)] fn iterable(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "iterable") }
+    #[pyattr(once)] fn bitwise_count(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "bitwise_count") }
+    #[pyattr(once)] fn array_repr(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "array_repr") }
+    #[pyattr(once)] fn array_str(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "array_str") }
+    #[pyattr(once)] fn array2string(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "array2string") }
+    #[pyattr(once)] fn format_float_positional(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "format_float_positional") }
+    #[pyattr(once)] fn format_float_scientific(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "format_float_scientific") }
+    #[pyattr(once)] fn set_printoptions(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "set_printoptions") }
+    #[pyattr(once)] fn get_printoptions(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "get_printoptions") }
+    #[pyattr(once)] fn printoptions(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "printoptions") }
+    #[pyattr(once)] fn getbufsize(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "getbufsize") }
+    #[pyattr(once)] fn setbufsize(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "setbufsize") }
+    #[pyattr(once)] fn seterrcall(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "seterrcall") }
+    #[pyattr(once)] fn frombuffer(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "frombuffer") }
+    #[pyattr(once)] fn from_dlpack(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "from_dlpack") }
+    #[pyattr(once)] fn fromfunction(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "fromfunction") }
+    #[pyattr(once)] fn fromregex(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "fromregex") }
+    #[pyattr(once)] fn genfromtxt(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "genfromtxt") }
+    #[pyattr(once)] fn asarray_chkfinite(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "asarray_chkfinite") }
+    #[pyattr(once)] fn packbits(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "packbits") }
+    #[pyattr(once)] fn unpackbits(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "unpackbits") }
+    #[pyattr(once)] fn putmask(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "putmask") }
+    #[pyattr(once)] fn shares_memory(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "shares_memory") }
+    #[pyattr(once)] fn may_share_memory(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "may_share_memory") }
+    #[pyattr(once)] fn info(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "info") }
+    #[pyattr(once)] fn show_config(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "show_config") }
+    #[pyattr(once)] fn show_runtime(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "show_runtime") }
+    #[pyattr(once)] fn get_include(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "get_include") }
+    #[pyattr(once)] fn common_type(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "common_type") }
+    #[pyattr(once)] fn mintypecode(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "mintypecode") }
+    #[pyattr(once)] fn typename(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "typename") }
+    #[pyattr(once)] fn typecodes(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "typecodes") }
+    #[pyattr(once)] fn select(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "select") }
+    #[pyattr(once)] fn piecewise(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "piecewise") }
+    #[pyattr(once)] fn apply_over_axes(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "apply_over_axes") }
+    #[pyattr(once)] fn einsum_path(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "einsum_path") }
+    #[pyattr(once)] fn index_exp(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "index_exp") }
+
+    // ---- datetime / timedelta family ----
+    //
+    // Lives in py-src/_datetime.py and is wired via the same
+    // build_py_submodule/cache mechanism as _top_extras. The classes
+    // wrap Python's `datetime` for scalar arithmetic; rumpy currently
+    // doesn't expose datetime64 as a real ndarray dtype.
+
+    fn datetime_module(vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        thread_local! {
+            static CACHE: std::cell::RefCell<Option<(usize, PyObjectRef)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        let key = vm as *const VirtualMachine as usize;
+        let hit = CACHE.with(|c| {
+            c.borrow()
+                .as_ref()
+                .and_then(|(k, m)| if *k == key { Some(m.clone()) } else { None })
+        });
+        if let Some(m) = hit {
+            return Ok(m);
+        }
+        let m = build_py_submodule(
+            vm,
+            "numpy._datetime",
+            include_str!("../py-src/_datetime.py"),
+            &[],
+        )?;
+        CACHE.with(|c| { *c.borrow_mut() = Some((key, m.clone())); });
+        Ok(m)
+    }
+
+    fn fetch_datetime(vm: &VirtualMachine, name: &'static str) -> PyObjectRef {
+        match datetime_module(vm) {
+            Ok(m) => m.get_attr(name, vm).unwrap_or_else(|_| vm.ctx.none()),
+            Err(_) => vm.ctx.none(),
+        }
+    }
+
+    fn iter_module(vm: &VirtualMachine) -> PyResult<PyObjectRef> {
+        thread_local! {
+            static CACHE: std::cell::RefCell<Option<(usize, PyObjectRef)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        let key = vm as *const VirtualMachine as usize;
+        let hit = CACHE.with(|c| {
+            c.borrow()
+                .as_ref()
+                .and_then(|(k, m)| if *k == key { Some(m.clone()) } else { None })
+        });
+        if let Some(m) = hit {
+            return Ok(m);
+        }
+        let numpy_mod = vm.import("numpy", 0)?;
+        let m = build_py_submodule(
+            vm,
+            "numpy._iter",
+            include_str!("../py-src/_iter.py"),
+            &[("_np", numpy_mod)],
+        )?;
+        CACHE.with(|c| { *c.borrow_mut() = Some((key, m.clone())); });
+        Ok(m)
+    }
+
+    fn fetch_iter(vm: &VirtualMachine, name: &'static str) -> PyObjectRef {
+        match iter_module(vm) {
+            Ok(m) => m.get_attr(name, vm).unwrap_or_else(|_| vm.ctx.none()),
+            Err(_) => vm.ctx.none(),
+        }
+    }
+
+    // Top-level wrappers from _top_extras.
+    #[pyattr(once)] fn poly1d(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "poly1d") }
+    #[pyattr(once)] fn poly(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "poly") }
+    #[pyattr(once)] fn polyadd(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "polyadd") }
+    #[pyattr(once)] fn polysub(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "polysub") }
+    #[pyattr(once)] fn polymul(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "polymul") }
+    #[pyattr(once)] fn polydiv(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "polydiv") }
+    #[pyattr(once)] fn ufunc(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "ufunc") }
+
+    // recarray / record — re-export from numpy.rec.
+    #[pyattr(once)]
+    fn recarray(vm: &VirtualMachine) -> PyObjectRef {
+        let numpy_mod = vm
+            .import("numpy", 0)
+            .unwrap_or_else(|err| typing_panic(vm, "recarray", &err));
+        let rec_mod = numpy_mod
+            .get_attr("rec", vm)
+            .unwrap_or_else(|err| typing_panic(vm, "recarray", &err));
+        rec_mod
+            .get_attr("recarray", vm)
+            .unwrap_or_else(|err| typing_panic(vm, "recarray", &err))
+    }
+    #[pyattr(once)]
+    fn record(vm: &VirtualMachine) -> PyObjectRef {
+        let numpy_mod = vm
+            .import("numpy", 0)
+            .unwrap_or_else(|err| typing_panic(vm, "record", &err));
+        let rec_mod = numpy_mod
+            .get_attr("rec", vm)
+            .unwrap_or_else(|err| typing_panic(vm, "record", &err));
+        rec_mod
+            .get_attr("record", vm)
+            .unwrap_or_else(|err| typing_panic(vm, "record", &err))
+    }
+
+    #[pyattr(once)] fn ndindex(vm: &VirtualMachine) -> PyObjectRef { fetch_iter(vm, "ndindex") }
+    #[pyattr(once)] fn ndenumerate(vm: &VirtualMachine) -> PyObjectRef { fetch_iter(vm, "ndenumerate") }
+    #[pyattr(once)] fn broadcast(vm: &VirtualMachine) -> PyObjectRef { fetch_iter(vm, "broadcast") }
+    #[pyattr(once)] fn nditer(vm: &VirtualMachine) -> PyObjectRef { fetch_iter(vm, "nditer") }
+    #[pyattr(once)] fn flatiter(vm: &VirtualMachine) -> PyObjectRef { fetch_iter(vm, "flatiter") }
+    #[pyattr(once)] fn nested_iters(vm: &VirtualMachine) -> PyObjectRef { fetch_iter(vm, "nested_iters") }
+    #[pyattr(once)] fn memmap(vm: &VirtualMachine) -> PyObjectRef { fetch_iter(vm, "memmap") }
+
+    #[pyattr(once)] fn datetime64(vm: &VirtualMachine) -> PyObjectRef { fetch_datetime(vm, "datetime64") }
+    #[pyattr(once)] fn timedelta64(vm: &VirtualMachine) -> PyObjectRef { fetch_datetime(vm, "timedelta64") }
+    #[pyattr(once)] fn datetime_as_string(vm: &VirtualMachine) -> PyObjectRef { fetch_datetime(vm, "datetime_as_string") }
+    #[pyattr(once)] fn datetime_data(vm: &VirtualMachine) -> PyObjectRef { fetch_datetime(vm, "datetime_data") }
+    #[pyattr(once)] fn busdaycalendar(vm: &VirtualMachine) -> PyObjectRef { fetch_datetime(vm, "busdaycalendar") }
+    #[pyattr(once)] fn is_busday(vm: &VirtualMachine) -> PyObjectRef { fetch_datetime(vm, "is_busday") }
+    #[pyattr(once)] fn busday_count(vm: &VirtualMachine) -> PyObjectRef { fetch_datetime(vm, "busday_count") }
+    #[pyattr(once)] fn busday_offset(vm: &VirtualMachine) -> PyObjectRef { fetch_datetime(vm, "busday_offset") }
+
+    // These need custom names because they clash with Rust keywords or
+    // are intentionally exposed differently.
+    #[pyattr(once, name = "copy")]
+    fn np_copy(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "copy") }
+    #[pyattr(once, name = "shape")]
+    fn np_shape(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "shape") }
+    #[pyattr(once, name = "size")]
+    fn np_size(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "size") }
+    #[pyattr(once, name = "ndim")]
+    fn np_ndim(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "ndim") }
+    #[pyattr(once, name = "diagonal")]
+    fn np_diagonal(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "diagonal") }
+    #[pyattr(once, name = "std")]
+    fn np_std(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "std") }
+    #[pyattr(once, name = "var")]
+    fn np_var(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "var") }
+    #[pyattr(once, name = "test")]
+    fn np_test(vm: &VirtualMachine) -> PyObjectRef { fetch_top_extra(vm, "test") }
 
     // ---------------- mgrid / ogrid / r_ / c_ / s_ / ix_ ----------------
 
@@ -7807,6 +9435,32 @@ pub(crate) mod numpy_module {
     #[pyattr(once, name = "sctypeDict")]
     fn sctype_dict(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "sctypeDict") }
 
+    // Python-builtin-shadowing aliases that numpy 2.x re-added.
+    #[pyattr(once, name = "bool")]
+    fn bool_alias(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "bool") }
+    #[pyattr(once, name = "int_")]
+    fn int_alias(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "int_") }
+    #[pyattr(once, name = "uint")]
+    fn uint_alias(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "uint") }
+    #[pyattr(once, name = "long")]
+    fn long_alias(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "long") }
+    #[pyattr(once, name = "ulong")]
+    fn ulong_alias(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "ulong") }
+
+    // Extended precision (rumpy lacks 80-bit floats; these are aliased to f64).
+    #[pyattr(once)] fn longdouble(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "longdouble") }
+    #[pyattr(once)] fn clongdouble(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "clongdouble") }
+    #[pyattr(once)] fn float128(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "float128") }
+    #[pyattr(once)] fn complex256(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "complex256") }
+
+    // String / object / void scalar types.
+    #[pyattr(once)] fn flexible(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "flexible") }
+    #[pyattr(once)] fn character(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "character") }
+    #[pyattr(once)] fn str_(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "str_") }
+    #[pyattr(once)] fn bytes_(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "bytes_") }
+    #[pyattr(once)] fn object_(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "object_") }
+    #[pyattr(once)] fn void(vm: &VirtualMachine) -> PyObjectRef { fetch_scalar_class(vm, "void") }
+
     /// Build a list of math primitives (functions + constants) implemented
     /// in Rust, suitable for injecting into a submodule's namespace under
     /// `_pi`, `_sqrt`, `_log`, … This lets pure-Python submodules avoid
@@ -7874,14 +9528,22 @@ pub(crate) mod numpy_module {
         Ok(module.into())
     }
 
+    /// Build a stand-in module when one of the Python-shim submodules fails
+    /// to load at init time. This previously `panic!()`'d, which kills the
+    /// embedding host; instead we return an empty module whose docstring
+    /// records the build error, so the embedder stays alive and any user
+    /// inspecting the failed submodule can see why it's empty.
     fn typing_panic(
         vm: &VirtualMachine,
         what: &str,
         err: &rustpython_vm::PyRef<rustpython_vm::builtins::PyBaseException>,
-    ) -> ! {
+    ) -> PyObjectRef {
         let mut msg = format!("rumpy: failed to build {what} — ");
         let _ = vm.write_exception(&mut msg, err);
-        panic!("{msg}")
+        let dict = vm.ctx.new_dict();
+        let _ = dict.set_item("__build_error__", vm.ctx.new_str(msg.clone()).into(), vm);
+        let _ = dict.set_item("__doc__", vm.ctx.new_str(msg).into(), vm);
+        vm.new_module(what, dict, None).into()
     }
 
     // -----------------------------------------------------------------

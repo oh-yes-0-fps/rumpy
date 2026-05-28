@@ -282,7 +282,16 @@ pub fn apply_index(
                         .to_string(),
                 ));
             }
-            IdxItem::NewAxis | IdxItem::Ellipsis => unreachable!(),
+            // `NewAxis`/`Ellipsis` items are filtered out before this loop —
+            // `expand_ellipsis` rewrites the index list. Surfacing a clean
+            // internal error here rather than panicking guards against any
+            // future bug that lets one through.
+            IdxItem::NewAxis | IdxItem::Ellipsis => {
+                return Err(crate::internal::internal(
+                    vm,
+                    "apply_index: NewAxis/Ellipsis leaked past expand_ellipsis",
+                ));
+            }
         }
     }
     // Re-interleave length-1 axes for each NewAxis marker by reading the
@@ -337,6 +346,21 @@ fn bool_mask_select(
                 .map(ArraysD::$var)
         }};
     }
+    // Clone-based variant for non-Copy element types (String, Vec<u8>,
+    // PyObjectRef). $build takes the resulting ArrayD and wraps it back
+    // into the right ArraysD variant.
+    macro_rules! per_clone {
+        ($arr:ident, $build:expr) => {{
+            let v: Vec<_> = $arr
+                .iter()
+                .zip(mask.iter())
+                .filter_map(|(val, &m)| if m { Some(val.clone()) } else { None })
+                .collect();
+            ArrayD::from_shape_vec(IxDyn(&[v.len()]), v)
+                .or_internal(vm, "bool_mask_select")
+                .map($build)
+        }};
+    }
     match flat {
         ArraysD::Bool(arr) => per!(Bool, bool, arr),
         ArraysD::I8(arr) => per!(I8, i8, arr),
@@ -352,6 +376,24 @@ fn bool_mask_select(
         ArraysD::F64(arr) => per!(F64, f64, arr),
         ArraysD::C64(arr) => per!(C64, crate::dtype::C32, arr),
         ArraysD::C128(arr) => per!(C128, crate::dtype::C64, arr),
+        ArraysD::Object(arr) => per_clone!(arr, ArraysD::Object),
+        ArraysD::Str { itemsize_chars, data } => {
+            let n = itemsize_chars;
+            per_clone!(data, |d| ArraysD::Str { itemsize_chars: n, data: d })
+        }
+        ArraysD::Bytes { itemsize, data } => {
+            let n = itemsize;
+            per_clone!(data, |d| ArraysD::Bytes { itemsize: n, data: d })
+        }
+        ArraysD::Datetime64 { unit, data } => {
+            per_clone!(data, |d| ArraysD::Datetime64 { unit, data: d })
+        }
+        ArraysD::Timedelta64 { unit, data } => {
+            per_clone!(data, |d| ArraysD::Timedelta64 { unit, data: d })
+        }
+        ArraysD::Void { layout, data } => {
+            per_clone!(data, |d| ArraysD::Void { layout: layout.clone(), data: d })
+        }
     }
 }
 
@@ -407,6 +449,7 @@ fn empty_like_shape(a: &ArraysD, shape: &[usize]) -> ArraysD {
         ArraysD::F64(_) => per!(F64, f64),
         ArraysD::C64(_) => per!(C64, crate::dtype::C32),
         ArraysD::C128(_) => per!(C128, crate::dtype::C64),
+        _ => { a.clone() },
     }
 }
 
@@ -414,7 +457,7 @@ fn scalar_at(a: &ArraysD, idx: IxDyn) -> ArraysD {
     use crate::dtype::ArraysD::*;
     macro_rules! one {
         ($variant:ident, $arr:ident) => {{
-            $variant(ArrayD::from_elem(IxDyn(&[]), $arr[idx]))
+            $variant(ArrayD::from_elem(IxDyn(&[]), $arr[idx.clone()]))
         }};
     }
     match a {
@@ -432,6 +475,27 @@ fn scalar_at(a: &ArraysD, idx: IxDyn) -> ArraysD {
         F64(arr) => one!(F64, arr),
         C64(arr) => one!(C64, arr),
         C128(arr) => one!(C128, arr),
+        Object(arr) => Object(ArrayD::from_elem(IxDyn(&[]), arr[idx].clone())),
+        Str { itemsize_chars, data } => Str {
+            itemsize_chars: *itemsize_chars,
+            data: ArrayD::from_elem(IxDyn(&[]), data[idx].clone()),
+        },
+        Bytes { itemsize, data } => Bytes {
+            itemsize: *itemsize,
+            data: ArrayD::from_elem(IxDyn(&[]), data[idx].clone()),
+        },
+        Datetime64 { unit, data } => Datetime64 {
+            unit: *unit,
+            data: ArrayD::from_elem(IxDyn(&[]), data[idx]),
+        },
+        Timedelta64 { unit, data } => Timedelta64 {
+            unit: *unit,
+            data: ArrayD::from_elem(IxDyn(&[]), data[idx]),
+        },
+        Void { layout, data } => Void {
+            layout: layout.clone(),
+            data: ArrayD::from_elem(IxDyn(&[]), data[idx].clone()),
+        },
     }
 }
 
@@ -456,6 +520,27 @@ fn index_axis(a: &ArraysD, axis: usize, n: usize) -> ArraysD {
         ArraysD::F64(arr) => per!(F64, arr),
         ArraysD::C64(arr) => per!(C64, arr),
         ArraysD::C128(arr) => per!(C128, arr),
+        ArraysD::Object(arr) => ArraysD::Object(arr.clone().index_axis_move(Axis(axis), n)),
+        ArraysD::Str { itemsize_chars, data } => ArraysD::Str {
+            itemsize_chars: *itemsize_chars,
+            data: data.clone().index_axis_move(Axis(axis), n),
+        },
+        ArraysD::Bytes { itemsize, data } => ArraysD::Bytes {
+            itemsize: *itemsize,
+            data: data.clone().index_axis_move(Axis(axis), n),
+        },
+        ArraysD::Datetime64 { unit, data } => ArraysD::Datetime64 {
+            unit: *unit,
+            data: data.clone().index_axis_move(Axis(axis), n),
+        },
+        ArraysD::Timedelta64 { unit, data } => ArraysD::Timedelta64 {
+            unit: *unit,
+            data: data.clone().index_axis_move(Axis(axis), n),
+        },
+        ArraysD::Void { layout, data } => ArraysD::Void {
+            layout: layout.clone(),
+            data: data.clone().index_axis_move(Axis(axis), n),
+        },
     }
 }
 
@@ -493,8 +578,13 @@ pub fn set_via_index(
                 norm.push(normalize_idx(*v, dim, vm)?);
             }
         }
-        let v = crate::convert::obj_as_scalar_from_array(value, vm)?;
-        return set_scalar_at(a, IxDyn(&norm), v);
+        if a.dtype().is_numeric() {
+            let v = crate::convert::obj_as_scalar_from_array(value, vm)?;
+            return set_scalar_at(a, IxDyn(&norm), v, vm);
+        }
+        // Non-numeric scalar assignment: copy the value's single element
+        // directly (no f64 detour). value must be 0-D / single-element.
+        return set_nonnumeric_scalar_at(a, IxDyn(&norm), value, vm);
     }
     // Slice/int-prefix assignment: write `value` (broadcast) into the
     // sub-view selected by the index path.
@@ -747,7 +837,7 @@ fn set_each(
     a: &mut ArraysD,
     mask: impl Iterator<Item = bool>,
     provider: &ValueProvider,
-    _vm: &VirtualMachine,
+    vm: &VirtualMachine,
 ) -> PyResult<()> {
     let mask: Vec<bool> = mask.collect();
     // Pre-cast the source values to the destination dtype so the inner
@@ -802,6 +892,7 @@ fn set_each(
             arr,
             |f: f64| crate::dtype::C64::new(f, 0.0)
         ),
+        _ => { return Err(crate::internal::unsupported_dtype(vm, "set_each", a.dtype())) },
     }
     Ok(())
 }
@@ -823,6 +914,9 @@ enum RowMut<'a> {
     F64(ndarray::ArrayViewMutD<'a, f64>),
     C64(ndarray::ArrayViewMutD<'a, crate::dtype::C32>),
     C128(ndarray::ArrayViewMutD<'a, crate::dtype::C64>),
+    /// Sentinel for non-numeric variants: assignment helpers check for this
+    /// and surface a `TypeError` to Python rather than panicking.
+    Unsupported(DType),
 }
 
 fn row_mut(a: &mut ArraysD, i: usize) -> RowMut<'_> {
@@ -841,6 +935,7 @@ fn row_mut(a: &mut ArraysD, i: usize) -> RowMut<'_> {
         ArraysD::F64(arr) => RowMut::F64(arr.index_axis_mut(Axis(0), i)),
         ArraysD::C64(arr) => RowMut::C64(arr.index_axis_mut(Axis(0), i)),
         ArraysD::C128(arr) => RowMut::C128(arr.index_axis_mut(Axis(0), i)),
+        other => RowMut::Unsupported(other.dtype()),
     }
 }
 
@@ -871,6 +966,9 @@ fn set_row_scalar_dispatch(
         RowMut::F64(v) => v.fill(f),
         RowMut::C64(v) => v.fill(crate::dtype::C32::new(f as f32, 0.0)),
         RowMut::C128(v) => v.fill(crate::dtype::C64::new(f, 0.0)),
+        RowMut::Unsupported(dt) => {
+            return Err(crate::internal::unsupported_dtype(vm, "set_row_scalar", *dt));
+        }
     }
     Ok(())
 }
@@ -893,7 +991,50 @@ fn set_row_scalar_bool(
     Ok(())
 }
 
-fn set_scalar_at(a: &mut ArraysD, ix: IxDyn, scalar: f64) -> PyResult<()> {
+/// Scalar assignment for non-numeric arrays. `value` is converted to the
+/// same dtype as `a` (which copies its single element) and that element is
+/// written into `a[ix]`.
+fn set_nonnumeric_scalar_at(
+    a: &mut ArraysD,
+    ix: IxDyn,
+    value: &ArraysD,
+    vm: &VirtualMachine,
+) -> PyResult<()> {
+    if value.len() != 1 {
+        return Err(vm.new_value_error(format!(
+            "expected a scalar value for assignment, got shape {:?}",
+            value.shape()
+        )));
+    }
+    let coerced = value.cast(a.dtype());
+    macro_rules! per {
+        ($dst:ident, $src:ident) => {{
+            let v = $src
+                .iter()
+                .next()
+                .cloned()
+                .ok_or_else(|| crate::internal::internal(vm, "set_nonnumeric_scalar_at: empty src"))?;
+            $dst[ix] = v;
+        }};
+    }
+    match (a, coerced) {
+        (ArraysD::Str { data: dst, .. }, ArraysD::Str { data: src, .. }) => per!(dst, src),
+        (ArraysD::Bytes { data: dst, .. }, ArraysD::Bytes { data: src, .. }) => per!(dst, src),
+        (ArraysD::Object(dst), ArraysD::Object(src)) => per!(dst, src),
+        (ArraysD::Datetime64 { data: dst, .. }, ArraysD::Datetime64 { data: src, .. }) => per!(dst, src),
+        (ArraysD::Timedelta64 { data: dst, .. }, ArraysD::Timedelta64 { data: src, .. }) => per!(dst, src),
+        (ArraysD::Void { data: dst, .. }, ArraysD::Void { data: src, .. }) => per!(dst, src),
+        (dst, _) => return Err(crate::internal::unsupported_dtype(vm, "set_nonnumeric_scalar_at", dst.dtype())),
+    }
+    Ok(())
+}
+
+fn set_scalar_at(
+    a: &mut ArraysD,
+    ix: IxDyn,
+    scalar: f64,
+    vm: &VirtualMachine,
+) -> PyResult<()> {
     match a {
         ArraysD::Bool(arr) => arr[ix] = scalar != 0.0,
         ArraysD::I8(arr) => arr[ix] = scalar as i8,
@@ -909,6 +1050,7 @@ fn set_scalar_at(a: &mut ArraysD, ix: IxDyn, scalar: f64) -> PyResult<()> {
         ArraysD::F64(arr) => arr[ix] = scalar,
         ArraysD::C64(arr) => arr[ix] = crate::dtype::C32::new(scalar as f32, 0.0),
         ArraysD::C128(arr) => arr[ix] = crate::dtype::C64::new(scalar, 0.0),
+        _ => { return Err(crate::internal::unsupported_dtype(vm, "set_scalar_at", a.dtype())) },
     }
     Ok(())
 }
@@ -961,5 +1103,26 @@ fn slice_axis(
         ArraysD::F64(arr) => per!(F64, arr),
         ArraysD::C64(arr) => per!(C64, arr),
         ArraysD::C128(arr) => per!(C128, arr),
+        ArraysD::Object(arr) => ArraysD::Object(arr.slice(si.as_ref()).to_owned()),
+        ArraysD::Str { itemsize_chars, data } => ArraysD::Str {
+            itemsize_chars: *itemsize_chars,
+            data: data.slice(si.as_ref()).to_owned(),
+        },
+        ArraysD::Bytes { itemsize, data } => ArraysD::Bytes {
+            itemsize: *itemsize,
+            data: data.slice(si.as_ref()).to_owned(),
+        },
+        ArraysD::Datetime64 { unit, data } => ArraysD::Datetime64 {
+            unit: *unit,
+            data: data.slice(si.as_ref()).to_owned(),
+        },
+        ArraysD::Timedelta64 { unit, data } => ArraysD::Timedelta64 {
+            unit: *unit,
+            data: data.slice(si.as_ref()).to_owned(),
+        },
+        ArraysD::Void { layout, data } => ArraysD::Void {
+            layout: layout.clone(),
+            data: data.slice(si.as_ref()).to_owned(),
+        },
     })
 }

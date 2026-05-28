@@ -253,6 +253,7 @@ fn write_raw<W: Write>(w: &mut W, a: &ArraysD) -> std::io::Result<()> {
                 w.write_all(&v.im.to_le_bytes())?;
             }
         }
+        _ => { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "non-numeric dtype not supported by write_raw")) },
     }
     Ok(())
 }
@@ -348,5 +349,6 @@ fn read_raw(buf: &[u8], dtype: DType, count: isize) -> std::io::Result<ArraysD> 
             }
             ArraysD::C128(ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default())
         }
+        _ => { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "non-numeric dtype not supported by read_raw")) },
     })
 }

@@ -692,11 +692,14 @@ pub fn diff_axis(
             ArraysD::$var(out)
         }};
     }
-    // Bool diff becomes i8 like numpy.
-    let widened = if matches!(a, ArraysD::Bool(_)) {
-        a.cast(DType::I8)
-    } else {
-        a.clone()
+    // numpy promotes the diff dtype so negative results fit:
+    //   Bool -> i8;  U<n> -> I<2n> (capped at I64).
+    let widened = match a.dtype() {
+        DType::Bool => a.cast(DType::I8),
+        DType::U8 => a.cast(DType::I16),
+        DType::U16 => a.cast(DType::I32),
+        DType::U32 | DType::U64 => a.cast(DType::I64),
+        _ => a.clone(),
     };
     Ok(match widened {
         ArraysD::I8(arr) => diff_per!(I8, arr, |a: i8, b: i8| a.wrapping_sub(b)),
@@ -715,6 +718,7 @@ pub fn diff_axis(
         ArraysD::C64(arr) => diff_per!(C64, arr, |a: C32, b: C32| a - b),
         ArraysD::C128(arr) => diff_per!(C128, arr, |a: C64, b: C64| a - b),
         ArraysD::Bool(_) => return Err(internal(vm, "diff: bool slipped past widening")),
+        _ => { return Err(crate::internal::unsupported_dtype(vm, "diff", a.dtype())) },
     })
 }
 
@@ -725,8 +729,15 @@ pub fn diff(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     if n == 0 {
         return Ok(f);
     }
+    // Unsigned subtraction would wrap (uint8(1) - uint8(2) == 255), so
+    // widen to a signed type that can express negative diffs. numpy's
+    // rule: U<n> -> I<2n> (capped at I64).
     let widened = match f.dtype() {
         DType::Bool => f.cast(DType::I8),
+        DType::U8 => f.cast(DType::I16),
+        DType::U16 => f.cast(DType::I32),
+        DType::U32 => f.cast(DType::I64),
+        DType::U64 => f.cast(DType::I64),
         _ => f,
     };
     Ok(match widened {
@@ -734,10 +745,6 @@ pub fn diff(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         ArraysD::I16(x) => ArraysD::I16(diff_ints(&x)),
         ArraysD::I32(x) => ArraysD::I32(diff_ints(&x)),
         ArraysD::I64(x) => ArraysD::I64(diff_ints(&x)),
-        ArraysD::U8(x) => ArraysD::U8(diff_ints(&x)),
-        ArraysD::U16(x) => ArraysD::U16(diff_ints(&x)),
-        ArraysD::U32(x) => ArraysD::U32(diff_ints(&x)),
-        ArraysD::U64(x) => ArraysD::U64(diff_ints(&x)),
         ArraysD::F16(x) => ArraysD::F16(diff_seq(&x, |a, b| f16::from_f32(f32::from(b) - f32::from(a)))),
         ArraysD::F32(x) => ArraysD::F32(diff_seq(&x, |a, b| b - a)),
         ArraysD::F64(x) => ArraysD::F64(diff_seq(&x, |a, b| b - a)),
@@ -878,6 +885,7 @@ pub fn where_op(
             });
             ArraysD::C128(out)
         }
+        _ => { return Err(crate::internal::unsupported_dtype(vm, "where", out_dt)) },
     })
 }
 
@@ -934,6 +942,22 @@ fn sort_flat(f: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         ArraysD::F16(x) => ArraysD::F16(sorted_float(x)),
         ArraysD::F32(x) => ArraysD::F32(sorted_float(x)),
         ArraysD::F64(x) => ArraysD::F64(sorted_float(x)),
+        ArraysD::Str { itemsize_chars, data } => {
+            let mut v: Vec<String> = data.iter().cloned().collect();
+            v.sort();
+            ArraysD::Str {
+                itemsize_chars,
+                data: ArrayD::from_shape_vec(IxDyn(&[v.len()]), v).unwrap_or_default(),
+            }
+        }
+        ArraysD::Bytes { itemsize, data } => {
+            let mut v: Vec<Vec<u8>> = data.iter().cloned().collect();
+            v.sort();
+            ArraysD::Bytes {
+                itemsize,
+                data: ArrayD::from_shape_vec(IxDyn(&[v.len()]), v).unwrap_or_default(),
+            }
+        }
         _ => return Err(internal(vm, "sort_flat: unexpected dtype")),
     })
 }
@@ -1041,6 +1065,20 @@ fn argsort_flat(f: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         ArraysD::F16(x) => order(x),
         ArraysD::F32(x) => order(x),
         ArraysD::F64(x) => order(x),
+        ArraysD::Str { data, .. } => {
+            let mut idx: Vec<i64> = (0..data.len() as i64).collect();
+            idx.sort_by(|&i, &j| {
+                data[IxDyn(&[i as usize])].cmp(&data[IxDyn(&[j as usize])])
+            });
+            idx
+        }
+        ArraysD::Bytes { data, .. } => {
+            let mut idx: Vec<i64> = (0..data.len() as i64).collect();
+            idx.sort_by(|&i, &j| {
+                data[IxDyn(&[i as usize])].cmp(&data[IxDyn(&[j as usize])])
+            });
+            idx
+        }
         _ => return Err(internal(vm, "argsort_flat: unexpected dtype")),
     };
     Ok(ArraysD::I64(
@@ -1077,6 +1115,26 @@ fn argsort_along_axis(a: &ArraysD, axis: usize, vm: &VirtualMachine) -> PyResult
             ArraysD::I64(out)
         }};
     }
+    // Clone-based variant for non-Copy element types.
+    macro_rules! per_clone {
+        ($arr:ident) => {{
+            let shape = $arr.shape().to_vec();
+            let mut out = ArrayD::<i64>::zeros(IxDyn(&shape));
+            for (lane, mut out_lane) in $arr
+                .lanes(Axis(axis))
+                .into_iter()
+                .zip(out.lanes_mut(Axis(axis)))
+            {
+                let n = lane.len();
+                let mut idx: Vec<i64> = (0..n as i64).collect();
+                idx.sort_by(|&i, &j| lane[i as usize].cmp(&lane[j as usize]));
+                for (slot, val) in out_lane.iter_mut().zip(idx.into_iter()) {
+                    *slot = val;
+                }
+            }
+            ArraysD::I64(out)
+        }};
+    }
     Ok(match a {
         ArraysD::Bool(arr) => per!(arr),
         ArraysD::I8(arr) => per!(arr),
@@ -1090,6 +1148,8 @@ fn argsort_along_axis(a: &ArraysD, axis: usize, vm: &VirtualMachine) -> PyResult
         ArraysD::F16(arr) => per!(arr),
         ArraysD::F32(arr) => per!(arr),
         ArraysD::F64(arr) => per!(arr),
+        ArraysD::Str { data, .. } => per_clone!(data),
+        ArraysD::Bytes { data, .. } => per_clone!(data),
         _ => return Err(internal(vm, "argsort: unexpected dtype")),
     })
 }
@@ -1118,6 +1178,22 @@ fn dedup_after_sort(arr: ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         ArraysD::F16(x) => ArraysD::F16(dedup_float(x)),
         ArraysD::F32(x) => ArraysD::F32(dedup_float(x)),
         ArraysD::F64(x) => ArraysD::F64(dedup_float(x)),
+        ArraysD::Str { itemsize_chars, data } => {
+            let mut v: Vec<String> = data.iter().cloned().collect();
+            v.dedup();
+            ArraysD::Str {
+                itemsize_chars,
+                data: ArrayD::from_shape_vec(IxDyn(&[v.len()]), v).unwrap_or_default(),
+            }
+        }
+        ArraysD::Bytes { itemsize, data } => {
+            let mut v: Vec<Vec<u8>> = data.iter().cloned().collect();
+            v.dedup();
+            ArraysD::Bytes {
+                itemsize,
+                data: ArrayD::from_shape_vec(IxDyn(&[v.len()]), v).unwrap_or_default(),
+            }
+        }
         _ => return Err(internal(vm, "unique/dedup: unexpected dtype")),
     })
 }
@@ -1227,6 +1303,7 @@ pub fn broadcast_to(a: &ArraysD, shape: &[usize], vm: &VirtualMachine) -> PyResu
         ArraysD::F64(x) => per!(F64, x),
         ArraysD::C64(x) => per!(C64, x),
         ArraysD::C128(x) => per!(C128, x),
+        _ => { return Err(crate::internal::unsupported_dtype(vm, "broadcast_to", a.dtype())) },
     }
 }
 
@@ -1260,6 +1337,7 @@ pub fn repeat(a: &ArraysD, count: usize) -> ArraysD {
         ArraysD::F64(x) => per!(F64, f64, x),
         ArraysD::C64(x) => per!(C64, C32, x),
         ArraysD::C128(x) => per!(C128, C64, x),
+        _ => { a.clone() },
     }
 }
 
@@ -1292,6 +1370,7 @@ pub fn tile(a: &ArraysD, reps: usize) -> ArraysD {
         ArraysD::F64(x) => per!(F64, f64, x),
         ArraysD::C64(x) => per!(C64, C32, x),
         ArraysD::C128(x) => per!(C128, C64, x),
+        _ => { a.clone() },
     }
 }
 

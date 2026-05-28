@@ -150,6 +150,76 @@ cfloat = complex128
 complex_ = complex128
 float_ = float64
 
+# Numpy 2.x reintroduced these top-level python-builtin-shadowing aliases.
+# Each is the same scalar class as its sibling, just under the bare name.
+bool = bool_
+int_ = int64
+uint = uint64
+long = int64
+ulong = uint64
+
+# Long-double has the same representation as double in rumpy — no extended
+# precision in the underlying ndarray crate. We expose the names so that
+# `isinstance(x, np.longdouble)` and dtype-name lookups round-trip.
+class longdouble(floating):
+    _dtype_name = "float64"
+
+
+class clongdouble(complexfloating):
+    _dtype_name = "complex128"
+
+
+# numpy exposes float128/complex256 on Linux/x86-64 (80-bit extended precision
+# padded to 16/32 bytes). The rumpy backend has no extended precision so we
+# alias both to the same class as longdouble/clongdouble, matching numpy's
+# behaviour on platforms without true long-double support. `np.float128 is
+# np.longdouble` returns True in that mode (it does on real numpy too when
+# they refer to the same internal type).
+float128 = longdouble
+complex256 = clongdouble
+
+
+# Abstract bases that real numpy keeps in the scalar tree even though they're
+# not numeric. Calling them raises (they're abstract).
+class flexible(generic):
+    """Abstract base for flexible-width scalar types (`character`, `void`)."""
+
+
+class character(flexible):
+    """Abstract base for string-like scalars (`str_`, `bytes_`)."""
+
+
+class str_(character):
+    """Unicode string scalar."""
+    _dtype_name = "U"
+
+    def __new__(cls, value=""):
+        return str(value)
+
+
+class bytes_(character):
+    """Bytes string scalar."""
+    _dtype_name = "S"
+
+    def __new__(cls, value=b""):
+        return bytes(value)
+
+
+class object_(generic):
+    """Object scalar — wraps any Python object verbatim."""
+    _dtype_name = "O"
+
+    def __new__(cls, value=None):
+        return value
+
+
+class void(flexible):
+    """Void-type scalar — typically used as record-array element."""
+    _dtype_name = "V"
+
+    def __new__(cls, value=b""):
+        return bytes(value)
+
 
 # Mappings for introspection.
 sctypeDict = {

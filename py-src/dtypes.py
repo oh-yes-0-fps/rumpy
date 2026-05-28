@@ -85,6 +85,40 @@ class ObjectDType(_DTypeBase):
     name = "object"
 
 
+class StringDType(_DTypeBase):
+    """Variable-length unicode string dtype (numpy 2.x)."""
+    name = "string"
+
+
+class VoidDType(_DTypeBase):
+    """Void / record dtype."""
+    name = "void"
+
+
+# numpy 2.x exposes the C-typedef-named variants of every integer width so
+# downstream type-check code keeps working under platform-default widths.
+# rumpy treats every C-named alias as its fixed-width sibling.
+
+ByteDType = _make("Byte", "int8")        # signed char
+UByteDType = _make("UByte", "uint8")     # unsigned char
+ShortDType = _make("Short", "int16")
+UShortDType = _make("UShort", "uint16")
+IntDType = _make("Int", "int32")          # C `int`
+UIntDType = _make("UInt", "uint32")
+LongDType = _make("Long", "int64")        # C `long` (LP64 — Unix 64-bit)
+ULongDType = _make("ULong", "uint64")
+LongLongDType = _make("LongLong", "int64")
+ULongLongDType = _make("ULongLong", "uint64")
+
+# Extended-precision float types: rumpy's ndarray crate has no f80 / f128,
+# so we alias long-double to float64 / complex128.
+LongDoubleDType = _make("LongDouble", "float64")
+CLongDoubleDType = _make("CLongDouble", "complex128")
+
+DateTime64DType = _make("DateTime64", "datetime64")
+TimeDelta64DType = _make("TimeDelta64", "timedelta64")
+
+
 __all__ = [
     "BoolDType",
     "Int8DType",
@@ -103,4 +137,20 @@ __all__ = [
     "StrDType",
     "BytesDType",
     "ObjectDType",
+    "StringDType",
+    "VoidDType",
+    "ByteDType",
+    "UByteDType",
+    "ShortDType",
+    "UShortDType",
+    "IntDType",
+    "UIntDType",
+    "LongDType",
+    "ULongDType",
+    "LongLongDType",
+    "ULongLongDType",
+    "LongDoubleDType",
+    "CLongDoubleDType",
+    "DateTime64DType",
+    "TimeDelta64DType",
 ]

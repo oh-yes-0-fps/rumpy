@@ -187,6 +187,28 @@ def greater_equal(x, y):
     return [a >= b for a, b in zip(x, y)]
 
 
+def istitle(x):
+    return _map(x, str.istitle)
+
+
+def partition(x, sep):
+    return [a.partition(sep) for a in x]
+
+
+def rpartition(x, sep):
+    return [a.rpartition(sep) for a in x]
+
+
+def translate(x, table, deletechars=None):
+    _ = deletechars
+    return [a.translate(table) for a in x]
+
+
+def slice(x, start=None, stop=None, step=None):
+    """Element-wise Python slice on each string."""
+    return [a[start:stop:step] for a in x]
+
+
 __all__ = [
     "add", "multiply", "mod",
     "capitalize", "title", "upper", "lower", "swapcase",
@@ -195,8 +217,9 @@ __all__ = [
     "startswith", "endswith",
     "count", "find", "rfind", "index", "rindex",
     "isalpha", "isalnum", "isdigit", "isspace", "isupper", "islower",
-    "isnumeric", "isdecimal",
+    "isnumeric", "isdecimal", "istitle",
     "str_len", "encode", "decode",
     "zfill", "center", "ljust", "rjust", "expandtabs",
     "equal", "not_equal", "less", "less_equal", "greater", "greater_equal",
+    "partition", "rpartition", "translate", "slice",
 ]

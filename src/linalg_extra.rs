@@ -21,6 +21,36 @@ fn as_f64_2d(
         .map_err(|e| crate::internal::internal(vm, format!("as_f64_2d: {e}")))
 }
 
+/// Copy a row-major `ndarray::Array2<f64>` into a (column-major) `faer::Mat`.
+fn nd_to_faer(arr: &ndarray::Array2<f64>) -> faer::Mat<f64> {
+    let (r, c) = arr.dim();
+    faer::Mat::from_fn(r, c, |i, j| arr[(i, j)])
+}
+
+/// Copy a `faer::MatRef<f64>` back into a row-major `ndarray::Array2<f64>`.
+fn faer_to_nd(m: faer::MatRef<'_, f64>) -> ndarray::Array2<f64> {
+    let (r, c) = (m.nrows(), m.ncols());
+    ndarray::Array2::from_shape_fn((r, c), |(i, j)| m[(i, j)])
+}
+
+/// Sign of a permutation given as a forward index array (output = `(-1)^(n - cycles)`).
+fn perm_sign(fwd: &[usize]) -> f64 {
+    let n = fwd.len();
+    let mut visited = vec![false; n];
+    let mut cycles = 0usize;
+    for i in 0..n {
+        if !visited[i] {
+            cycles += 1;
+            let mut j = i;
+            while !visited[j] {
+                visited[j] = true;
+                j = fwd[j];
+            }
+        }
+    }
+    if (n - cycles) % 2 == 0 { 1.0 } else { -1.0 }
+}
+
 /// The `ord` argument to `np.linalg.norm`. `None` means the default
 /// (2-norm for 1-D vectors, Frobenius for 2-D matrices).
 #[derive(Clone, Copy, Debug)]
@@ -300,17 +330,21 @@ fn matrix_norm_2d(
             }
             Ok(best)
         }
-        Some(NormOrd::Num(p)) if (p - 2.0).abs() < f64::EPSILON
-            || (p + 2.0).abs() < f64::EPSILON =>
-        {
-            Err(vm.new_not_implemented_error(
-                "matrix 2-norm (largest/smallest singular value) requires SVD; not yet implemented"
-                    .to_string(),
-            ))
+        Some(NormOrd::Num(p)) if (p - 2.0).abs() < f64::EPSILON => {
+            // Largest singular value.
+            let sv = singular_values(data, rows, cols, vm)?;
+            Ok(sv.into_iter().fold(0.0_f64, f64::max))
         }
-        Some(NormOrd::Nuc) => Err(vm.new_not_implemented_error(
-            "matrix nuclear norm requires SVD; not yet implemented".to_string(),
-        )),
+        Some(NormOrd::Num(p)) if (p + 2.0).abs() < f64::EPSILON => {
+            // Smallest singular value.
+            let sv = singular_values(data, rows, cols, vm)?;
+            Ok(sv.into_iter().fold(f64::INFINITY, f64::min))
+        }
+        Some(NormOrd::Nuc) => {
+            // Sum of singular values.
+            let sv = singular_values(data, rows, cols, vm)?;
+            Ok(sv.into_iter().sum())
+        }
         Some(NormOrd::Num(p)) => Err(vm.new_value_error(format!(
             "invalid matrix norm order: {p}"
         ))),
@@ -347,147 +381,98 @@ pub fn det(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     if r != c {
         return Err(vm.new_value_error("det: matrix must be square".to_string()));
     }
-    let n = r;
-    // LU with partial pivoting.
-    let mut a = m;
-    let mut det = 1.0f64;
-    for k in 0..n {
-        // Pivot.
-        let mut pivot = k;
-        let mut best = a[(k, k)].abs();
-        for i in (k + 1)..n {
-            if a[(i, k)].abs() > best {
-                best = a[(i, k)].abs();
-                pivot = i;
-            }
-        }
-        if best == 0.0 {
-            return Ok(ArraysD::F64(ArrayD::from_elem(IxDyn(&[]), 0.0)));
-        }
-        if pivot != k {
-            // swap rows
-            for j in 0..n {
-                let t = a[(k, j)];
-                a[(k, j)] = a[(pivot, j)];
-                a[(pivot, j)] = t;
-            }
-            det = -det;
-        }
-        det *= a[(k, k)];
-        let pivot_val = a[(k, k)];
-        for i in (k + 1)..n {
-            let factor = a[(i, k)] / pivot_val;
-            for j in k..n {
-                a[(i, j)] -= factor * a[(k, j)];
-            }
-        }
-    }
+    let mat = nd_to_faer(&m);
+    let det = mat.determinant();
     Ok(ArraysD::F64(ArrayD::from_elem(IxDyn(&[]), det)))
 }
 
 pub fn inv(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
+    use faer::linalg::solvers::DenseSolveCore;
     let m = as_f64_2d(a, vm)?;
     let (r, c) = m.dim();
     if r != c {
         return Err(vm.new_value_error("inv: matrix must be square".to_string()));
     }
-    let n = r;
-    // Gauss-Jordan with partial pivoting.
-    let mut aug = ndarray::Array2::<f64>::zeros((n, 2 * n));
-    for i in 0..n {
-        for j in 0..n {
-            aug[(i, j)] = m[(i, j)];
-        }
-        aug[(i, n + i)] = 1.0;
+    let mat = nd_to_faer(&m);
+    if mat.determinant() == 0.0 {
+        return Err(vm.new_value_error("inv: singular matrix".to_string()));
     }
-    for k in 0..n {
-        let mut pivot = k;
-        let mut best = aug[(k, k)].abs();
-        for i in (k + 1)..n {
-            if aug[(i, k)].abs() > best {
-                best = aug[(i, k)].abs();
-                pivot = i;
-            }
-        }
-        if best == 0.0 {
-            return Err(vm.new_value_error("inv: singular matrix".to_string()));
-        }
-        if pivot != k {
-            for j in 0..2 * n {
-                let t = aug[(k, j)];
-                aug[(k, j)] = aug[(pivot, j)];
-                aug[(pivot, j)] = t;
-            }
-        }
-        let pv = aug[(k, k)];
-        for j in 0..2 * n {
-            aug[(k, j)] /= pv;
-        }
-        for i in 0..n {
-            if i == k {
-                continue;
-            }
-            let factor = aug[(i, k)];
-            for j in 0..2 * n {
-                aug[(i, j)] -= factor * aug[(k, j)];
-            }
-        }
-    }
-    let inv = aug.slice(ndarray::s![.., n..]).to_owned();
-    Ok(ArraysD::F64(inv.into_dyn()))
+    let inv = mat.partial_piv_lu().inverse();
+    Ok(ArraysD::F64(faer_to_nd(inv.as_ref()).into_dyn()))
 }
 
 pub fn solve(a: &ArraysD, b: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
-    let m = as_f64_2d(a, vm)?;
-    let inv_m = inv(a, vm)?;
-    // Compute inv(A) · b.
-    let _ = m;
-    let result = crate::linalg::dot(&inv_m, &b.cast(DType::F64), vm)?;
-    Ok(result)
+    use faer::linalg::solvers::Solve;
+    let am = as_f64_2d(a, vm)?;
+    let (r, c) = am.dim();
+    if r != c {
+        return Err(vm.new_value_error("solve: matrix must be square".to_string()));
+    }
+    let bf = b.cast(DType::F64);
+    let (b_mat, was_1d) = match bf {
+        ArraysD::F64(arr) => match arr.ndim() {
+            1 => {
+                let n = arr.len();
+                if n != r {
+                    return Err(vm.new_value_error(format!(
+                        "solve: A rows ({r}) != b rows ({n})"
+                    )));
+                }
+                (faer::Mat::<f64>::from_fn(n, 1, |i, _| arr[i]), true)
+            }
+            2 => {
+                let arr2 = arr.into_dimensionality::<ndarray::Ix2>()
+                    .map_err(|e| crate::internal::internal(vm, format!("solve: {e}")))?;
+                if arr2.dim().0 != r {
+                    return Err(vm.new_value_error(format!(
+                        "solve: A rows ({}) != b rows ({})",
+                        r, arr2.dim().0
+                    )));
+                }
+                (nd_to_faer(&arr2), false)
+            }
+            _ => return Err(vm.new_value_error("solve: b must be 1-D or 2-D".to_string())),
+        },
+        _ => return Err(crate::internal::internal(vm, "solve: cast to F64 failed")),
+    };
+    let mat = nd_to_faer(&am);
+    if mat.determinant() == 0.0 {
+        return Err(vm.new_value_error("solve: singular matrix".to_string()));
+    }
+    let x = mat.partial_piv_lu().solve(&b_mat);
+    if was_1d {
+        let n = x.nrows();
+        let v: Vec<f64> = (0..n).map(|i| x[(i, 0)]).collect();
+        Ok(ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default()))
+    } else {
+        Ok(ArraysD::F64(faer_to_nd(x.as_ref()).into_dyn()))
+    }
 }
 
 pub fn matrix_rank(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let m = as_f64_2d(a, vm)?;
-    let (r, c) = m.dim();
-    let mut a = m;
-    let tol = 1e-12;
-    let mut rank = 0;
-    let limit = r.min(c);
-    let mut row = 0usize;
-    for col in 0..c {
-        if row >= limit {
-            break;
-        }
-        // Find pivot in this column.
-        let mut pivot = row;
-        let mut best = a[(row, col)].abs();
-        for i in (row + 1)..r {
-            if a[(i, col)].abs() > best {
-                best = a[(i, col)].abs();
-                pivot = i;
-            }
-        }
-        if best <= tol {
-            continue;
-        }
-        if pivot != row {
-            for j in 0..c {
-                let t = a[(row, j)];
-                a[(row, j)] = a[(pivot, j)];
-                a[(pivot, j)] = t;
-            }
-        }
-        let pv = a[(row, col)];
-        for i in (row + 1)..r {
-            let factor = a[(i, col)] / pv;
-            for j in col..c {
-                a[(i, j)] -= factor * a[(row, j)];
-            }
-        }
-        row += 1;
-        rank += 1;
+    let rank = svd_rank(&m, vm)? as i64;
+    Ok(ArraysD::I64(ArrayD::from_elem(IxDyn(&[]), rank)))
+}
+
+/// Numerical rank via SVD: count singular values strictly above
+/// `max(m, n) * largest_sv * eps`, matching numpy's default tolerance.
+fn svd_rank(m: &ndarray::Array2<f64>, vm: &VirtualMachine) -> PyResult<usize> {
+    let (rows, cols) = m.dim();
+    if rows == 0 || cols == 0 {
+        return Ok(0);
     }
-    Ok(ArraysD::I64(ArrayD::from_elem(IxDyn(&[]), rank as i64)))
+    let mat = nd_to_faer(m);
+    let svd = mat.thin_svd()
+        .map_err(|e| vm.new_value_error(format!("matrix_rank svd failed: {e:?}")))?;
+    let s = svd.S().column_vector();
+    let k = s.nrows();
+    if k == 0 {
+        return Ok(0);
+    }
+    let smax = (0..k).map(|i| s[i]).fold(0.0_f64, f64::max);
+    let tol = rows.max(cols) as f64 * smax * f64::EPSILON;
+    Ok((0..k).filter(|&i| s[i] > tol).count())
 }
 
 /// `np.trace` — sum of the diagonal.
@@ -510,24 +495,16 @@ pub fn cholesky(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         return Err(vm.new_value_error("cholesky: matrix must be square".to_string()));
     }
     let n = r;
+    let mat = nd_to_faer(&m);
+    let llt = mat.llt(faer::Side::Lower)
+        .map_err(|_| vm.new_value_error("cholesky: matrix is not positive-definite".to_string()))?;
+    // faer's L() is lower-triangular but may not zero the strict upper part —
+    // numpy expects a strictly-lower-triangular layout.
+    let l_ref = llt.L();
     let mut l = ndarray::Array2::<f64>::zeros((n, n));
     for i in 0..n {
         for j in 0..=i {
-            let mut sum = 0.0;
-            for k in 0..j {
-                sum += l[(i, k)] * l[(j, k)];
-            }
-            if i == j {
-                let diag = m[(i, i)] - sum;
-                if diag <= 0.0 {
-                    return Err(
-                        vm.new_value_error("cholesky: matrix is not positive-definite".to_string()),
-                    );
-                }
-                l[(i, j)] = diag.sqrt();
-            } else {
-                l[(i, j)] = (m[(i, j)] - sum) / l[(j, j)];
-            }
+            l[(i, j)] = l_ref[(i, j)];
         }
     }
     Ok(ArraysD::F64(l.into_dyn()))
@@ -555,7 +532,7 @@ impl QrMode {
     }
 }
 
-/// QR decomposition by classical Householder reflections.
+/// QR decomposition via faer.
 ///
 /// * `mode = Reduced` (numpy default) — returns `(Q[:, :k], R[:k, :])`.
 /// * `mode = Complete` — returns the full m×m Q and m×n R.
@@ -564,79 +541,39 @@ impl QrMode {
 pub fn qr(a: &ArraysD, mode: QrMode, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)> {
     let m = as_f64_2d(a, vm)?;
     let (rows, cols) = m.dim();
-    let mut r = m.clone();
-    let mut q = ndarray::Array2::<f64>::eye(rows);
     let k = rows.min(cols);
-    for col in 0..k {
-        // Build Householder vector v.
-        let mut alpha = 0.0;
-        for i in col..rows {
-            alpha += r[(i, col)] * r[(i, col)];
-        }
-        alpha = alpha.sqrt();
-        if r[(col, col)] > 0.0 {
-            alpha = -alpha;
-        }
-        if alpha == 0.0 {
-            continue;
-        }
-        let mut v = vec![0.0; rows];
-        v[col] = r[(col, col)] - alpha;
-        for i in (col + 1)..rows {
-            v[i] = r[(i, col)];
-        }
-        let norm2: f64 = v.iter().map(|x| x * x).sum();
-        if norm2 == 0.0 {
-            continue;
-        }
-        let beta = 2.0 / norm2;
-        // Apply H = I - β v vᵀ to R from the left: R = H · R
-        for j in col..cols {
-            let mut dot = 0.0;
-            for i in col..rows {
-                dot += v[i] * r[(i, j)];
-            }
-            let f = beta * dot;
-            for i in col..rows {
-                r[(i, j)] -= f * v[i];
-            }
-        }
-        // And Q from the right: Q = Q · Hᵀ = Q · H
-        for i in 0..rows {
-            let mut dot = 0.0;
-            for j in col..rows {
-                dot += q[(i, j)] * v[j];
-            }
-            let f = beta * dot;
-            for j in col..rows {
-                q[(i, j)] -= f * v[j];
-            }
+    let mat = nd_to_faer(&m);
+    let qr = mat.qr();
+    // faer's R() is full m×n with the strict-lower part holding householder
+    // garbage; mask the lower triangle to zero so the output matches numpy.
+    let r_full_ref = qr.R();
+    let mut r_full = ndarray::Array2::<f64>::zeros((rows, cols));
+    for i in 0..rows {
+        for j in i..cols {
+            r_full[(i, j)] = r_full_ref[(i, j)];
         }
     }
-    let k = rows.min(cols);
     let (q_out, r_out) = match mode {
-        QrMode::Complete => (q.clone(), r.clone()),
+        QrMode::Complete => {
+            let q = qr.compute_Q();
+            (faer_to_nd(q.as_ref()), r_full)
+        }
         QrMode::Reduced => {
-            let q_red = q.slice(ndarray::s![.., ..k]).to_owned();
-            let r_red = r.slice(ndarray::s![..k, ..]).to_owned();
-            (q_red, r_red)
+            let q = qr.compute_thin_Q();
+            let r_red = r_full.slice(ndarray::s![..k, ..]).to_owned();
+            (faer_to_nd(q.as_ref()), r_red)
         }
         QrMode::R => {
-            // Caller will discard the Q. We still need to produce something
-            // for the tuple slot; use a zero-shape array so it's cheap.
-            let r_red = r.slice(ndarray::s![..k, ..]).to_owned();
-            (
-                ndarray::Array2::<f64>::zeros((0, 0)),
-                r_red,
-            )
+            let r_red = r_full.slice(ndarray::s![..k, ..]).to_owned();
+            (ndarray::Array2::<f64>::zeros((0, 0)), r_red)
         }
     };
     Ok((ArraysD::F64(q_out.into_dyn()), ArraysD::F64(r_out.into_dyn())))
 }
 
 /// numpy.linalg.lstsq returns this tuple. `residuals` is empty when the
-/// system is underdetermined or full rank with k=0 columns (matching numpy);
-/// `s` is empty here because we don't have SVD.
+/// system is underdetermined or rank-deficient (matching numpy); `singular`
+/// holds the singular values of A.
 pub struct LstsqResult {
     pub solution: ArraysD,
     pub residuals: ArraysD,
@@ -644,279 +581,143 @@ pub struct LstsqResult {
     pub singular: ArraysD,
 }
 
-/// `numpy.linalg.lstsq(A, b)` — least-squares solution via the normal
-/// equations. The single-array `lstsq` (used internally) returns just the
-/// solution; the tuple form `lstsq_full` returns `(x, residuals, rank, s)`.
+/// `numpy.linalg.lstsq(A, b)` — least-squares solution via faer's SVD-backed
+/// `solve_lstsq`. The single-array `lstsq` (used internally) returns just
+/// the solution; the tuple form `lstsq_full` returns `(x, residuals, rank, s)`.
 pub fn lstsq_full(
     a: &ArraysD,
     b: &ArraysD,
     vm: &VirtualMachine,
 ) -> PyResult<LstsqResult> {
     let am = as_f64_2d(a, vm)?;
-    let (m, _n) = am.dim();
-    let solution = lstsq(a, b, vm)?;
-    // residuals = sum((A x - b)^2, axis=0) per column. numpy emits a 1-D
-    // array of length nrhs when m > rank, otherwise an empty array.
-    let prod = crate::linalg::dot(a, &solution, vm)?;
-    let diff = crate::ops::binary_op(&prod, b, vm, crate::ops::Sub)?;
-    let sq = crate::ops::binary_op(&diff, &diff, vm, crate::ops::Mul)?;
-    let residuals = sum_axis0(&sq);
-    let rank = matrix_rank_f64(&am);
-    let residuals = if m > rank as usize {
-        residuals
+    let (m, n) = am.dim();
+    let (b_mat, was_1d) = b_to_faer(b, m, vm)?;
+    let mat = nd_to_faer(&am);
+    let svd = mat.thin_svd()
+        .map_err(|e| vm.new_value_error(format!("lstsq svd failed: {e:?}")))?;
+    let s = svd.S().column_vector();
+    let k = s.nrows();
+    let smax = (0..k).map(|i| s[i]).fold(0.0_f64, f64::max);
+    let tol = m.max(n) as f64 * smax * f64::EPSILON;
+    let rank = (0..k).filter(|&i| s[i] > tol).count() as i64;
+    // SolveLstsq's solve_lstsq returns the (n × nrhs) minimum-norm solution.
+    use faer::linalg::solvers::SolveLstsq;
+    let x = svd.solve_lstsq(&b_mat);
+    let solution = faer_x_to_arraysd(&x, n, was_1d);
+    // Residuals (per RHS column): only emitted when m > rank and the system
+    // is overdetermined-and-full-rank (numpy convention).
+    let residuals = if m > rank as usize && rank as usize == n {
+        let nrhs = b_mat.ncols();
+        let mut out = ndarray::Array1::<f64>::zeros(nrhs);
+        for col in 0..nrhs {
+            let mut s = 0.0_f64;
+            for i in 0..m {
+                let mut ax_i = 0.0_f64;
+                for j in 0..n {
+                    ax_i += am[(i, j)] * x[(j, col)];
+                }
+                let r = ax_i - b_mat[(i, col)];
+                s += r * r;
+            }
+            out[col] = s;
+        }
+        ArraysD::F64(out.into_dyn())
     } else {
-        // Empty residuals when the system is square or underdetermined,
-        // matching numpy.
         crate::create::zeros(&[0], DType::F64)
     };
-    let singular = crate::create::zeros(&[0], DType::F64);
-    Ok(LstsqResult {
-        solution,
-        residuals,
-        rank: rank as i64,
-        singular,
-    })
+    let sv: Vec<f64> = (0..k).map(|i| s[i]).collect();
+    let singular = ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[k]), sv).unwrap_or_default());
+    Ok(LstsqResult { solution, residuals, rank, singular })
 }
 
-fn sum_axis0(a: &ArraysD) -> ArraysD {
-    match a {
-        ArraysD::F64(arr) => {
-            if arr.ndim() <= 1 {
-                let s: f64 = arr.iter().copied().sum();
-                ArraysD::F64(ndarray::ArrayD::from_elem(IxDyn(&[]), s))
-            } else {
-                let summed = arr.sum_axis(ndarray::Axis(0));
-                ArraysD::F64(summed)
+/// Convert `b` (1-D or 2-D, any numeric dtype) to a `faer::Mat<f64>` shaped
+/// `(m, nrhs)`. Returns the matrix and whether the input was 1-D so callers
+/// can reshape the output back.
+fn b_to_faer(
+    b: &ArraysD,
+    expected_rows: usize,
+    vm: &VirtualMachine,
+) -> PyResult<(faer::Mat<f64>, bool)> {
+    let bf = b.cast(DType::F64);
+    match bf {
+        ArraysD::F64(arr) => match arr.ndim() {
+            1 => {
+                let n = arr.len();
+                if n != expected_rows {
+                    return Err(vm.new_value_error(format!(
+                        "A rows ({expected_rows}) != b rows ({n})"
+                    )));
+                }
+                Ok((faer::Mat::<f64>::from_fn(n, 1, |i, _| arr[i]), true))
             }
-        }
-        // Caller always passes F64; safe fallback.
-        _ => ArraysD::F64(ndarray::ArrayD::from_elem(IxDyn(&[]), 0.0)),
+            2 => {
+                let arr2 = arr.into_dimensionality::<ndarray::Ix2>()
+                    .map_err(|e| crate::internal::internal(vm, format!("b_to_faer: {e}")))?;
+                let (br, bc) = arr2.dim();
+                if br != expected_rows {
+                    return Err(vm.new_value_error(format!(
+                        "A rows ({expected_rows}) != b rows ({br})"
+                    )));
+                }
+                Ok((faer::Mat::<f64>::from_fn(br, bc, |i, j| arr2[(i, j)]), false))
+            }
+            _ => Err(vm.new_value_error("b must be 1-D or 2-D".to_string())),
+        },
+        _ => Err(crate::internal::internal(vm, "b cast to F64 failed")),
     }
 }
 
-fn matrix_rank_f64(m: &ndarray::Array2<f64>) -> usize {
-    let (r, c) = m.dim();
-    let mut a = m.clone();
-    let tol = 1e-12;
-    let mut row = 0usize;
-    let limit = r.min(c);
-    for col in 0..c {
-        if row >= limit {
-            break;
-        }
-        let mut pivot = row;
-        let mut best = a[(row, col)].abs();
-        for i in (row + 1)..r {
-            if a[(i, col)].abs() > best {
-                best = a[(i, col)].abs();
-                pivot = i;
+/// Reshape a faer (n × nrhs) solution back into either a 1-D ArraysD (when
+/// the original RHS was 1-D) or a 2-D one.
+fn faer_x_to_arraysd(x: &faer::Mat<f64>, n: usize, was_1d: bool) -> ArraysD {
+    if was_1d {
+        let v: Vec<f64> = (0..n).map(|i| x[(i, 0)]).collect();
+        ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default())
+    } else {
+        let cols = x.ncols();
+        let mut out = ndarray::Array2::<f64>::zeros((n, cols));
+        for i in 0..n {
+            for j in 0..cols {
+                out[(i, j)] = x[(i, j)];
             }
         }
-        if best <= tol {
-            continue;
-        }
-        if pivot != row {
-            for j in 0..c {
-                let t = a[(row, j)];
-                a[(row, j)] = a[(pivot, j)];
-                a[(pivot, j)] = t;
-            }
-        }
-        let pv = a[(row, col)];
-        for i in (row + 1)..r {
-            let factor = a[(i, col)] / pv;
-            for j in col..c {
-                a[(i, j)] -= factor * a[(row, j)];
-            }
-        }
-        row += 1;
+        ArraysD::F64(out.into_dyn())
     }
-    row
 }
 
 /// Bare-bones lstsq returning just the solution. Used by `pinv`,
 /// `polyfit`, and as the workhorse for `lstsq_full`.
 pub fn lstsq(a: &ArraysD, b: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
+    use faer::linalg::solvers::SolveLstsq;
     let am = as_f64_2d(a, vm)?;
     let (m, n) = am.dim();
-    // Reshape b to (m, k) — accept 1-D b (k=1) or 2-D.
-    let bf = b.cast(DType::F64);
-    let (b2, was_1d) = match bf {
-        ArraysD::F64(arr) => match arr.ndim() {
-            1 => {
-                let v: Vec<f64> = arr.iter().copied().collect();
-                let v_len = v.len();
-                (
-                    ndarray::Array2::from_shape_vec((v_len, 1), v).unwrap_or_default(),
-                    true,
-                )
-            }
-            2 => (
-                arr.into_dimensionality::<ndarray::Ix2>()
-                    .map_err(|e| crate::internal::internal(vm, format!("lstsq: {e}")))?,
-                false,
-            ),
-            _ => {
-                return Err(vm.new_value_error("lstsq: b must be 1-D or 2-D".to_string()));
-            }
-        },
-        _ => return Err(crate::internal::internal(vm, "lstsq: cast to F64 failed")),
-    };
-    if b2.dim().0 != m {
-        return Err(vm.new_value_error(format!(
-            "lstsq: A rows ({}) != b rows ({})",
-            m,
-            b2.dim().0
-        )));
-    }
-    // Form Aᵀ A and Aᵀ b.
-    let at = am.t();
-    let ata = at.dot(&am);
-    let atb = at.dot(&b2);
-    // Solve ata · x = atb by Gauss-Jordan on a (n × (n+k)) augmented matrix.
-    let k = atb.dim().1;
-    let mut aug = ndarray::Array2::<f64>::zeros((n, n + k));
-    for i in 0..n {
-        for j in 0..n {
-            aug[(i, j)] = ata[(i, j)];
-        }
-        for j in 0..k {
-            aug[(i, n + j)] = atb[(i, j)];
-        }
-    }
-    for col in 0..n {
-        let mut pivot = col;
-        let mut best = aug[(col, col)].abs();
-        for i in (col + 1)..n {
-            if aug[(i, col)].abs() > best {
-                best = aug[(i, col)].abs();
-                pivot = i;
-            }
-        }
-        if best < 1e-14 {
-            return Err(
-                vm.new_value_error("lstsq: AᵀA is singular (rank-deficient input)".to_string()),
-            );
-        }
-        if pivot != col {
-            for j in 0..n + k {
-                let t = aug[(col, j)];
-                aug[(col, j)] = aug[(pivot, j)];
-                aug[(pivot, j)] = t;
-            }
-        }
-        let pv = aug[(col, col)];
-        for j in 0..n + k {
-            aug[(col, j)] /= pv;
-        }
-        for i in 0..n {
-            if i == col {
-                continue;
-            }
-            let factor = aug[(i, col)];
-            for j in 0..n + k {
-                aug[(i, j)] -= factor * aug[(col, j)];
-            }
-        }
-    }
-    let x = aug.slice(ndarray::s![.., n..]).to_owned();
-    Ok(if was_1d {
-        // Return 1-D when b was 1-D.
-        let v: Vec<f64> = x.iter().copied().collect();
-        ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default())
-    } else {
-        ArraysD::F64(x.into_dyn())
-    })
+    let (b_mat, was_1d) = b_to_faer(b, m, vm)?;
+    let mat = nd_to_faer(&am);
+    let svd = mat.thin_svd()
+        .map_err(|e| vm.new_value_error(format!("lstsq svd failed: {e:?}")))?;
+    let x = svd.solve_lstsq(&b_mat);
+    Ok(faer_x_to_arraysd(&x, n, was_1d))
 }
 
-/// `numpy.linalg.pinv(A)` — Moore-Penrose pseudoinverse via the normal
-/// equations: `pinv(A) = (Aᵀ A)⁻¹ Aᵀ` for full column-rank A.
+/// `numpy.linalg.pinv(A)` — Moore-Penrose pseudoinverse via faer SVD.
 pub fn pinv(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let am = as_f64_2d(a, vm)?;
-    let (m, n) = am.dim();
-    // Build A · pinv(A) = I_m  →  pinv(A) = lstsq(A, I_m).
-    let eye = ndarray::Array2::<f64>::eye(m);
-    let eye_arr =
-        ArraysD::F64(eye.into_dyn());
-    let result = lstsq(a, &eye_arr, vm)?;
-    let _ = (m, n);
-    Ok(result)
+    let mat = nd_to_faer(&am);
+    let svd = mat.thin_svd()
+        .map_err(|e| vm.new_value_error(format!("pinv svd failed: {e:?}")))?;
+    let p = svd.pseudoinverse();
+    Ok(ArraysD::F64(faer_to_nd(p.as_ref()).into_dyn()))
 }
 
 /// `numpy.linalg.eigvalsh(A)` — eigenvalues of a symmetric/Hermitian real
-/// matrix via Jacobi rotations. Returns the eigenvalues sorted ascending.
+/// matrix via faer's self-adjoint EVD. Returns eigenvalues sorted ascending.
 pub fn eigvalsh(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
-    let am = as_f64_2d(a, vm)?;
-    let (r, c) = am.dim();
-    if r != c {
-        return Err(vm.new_value_error("eigvalsh: matrix must be square".to_string()));
-    }
-    let n = r;
-    let mut a = am;
-    // Symmetrize to be safe (in case of small numerical asymmetry).
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let avg = 0.5 * (a[(i, j)] + a[(j, i)]);
-            a[(i, j)] = avg;
-            a[(j, i)] = avg;
-        }
-    }
-    let tol = 1e-12;
-    let max_sweeps = 100;
-    for _ in 0..max_sweeps {
-        // Find the largest off-diagonal element.
-        let mut pi = 0usize;
-        let mut pj = 1usize;
-        let mut best = 0.0;
-        for i in 0..n {
-            for j in (i + 1)..n {
-                if a[(i, j)].abs() > best {
-                    best = a[(i, j)].abs();
-                    pi = i;
-                    pj = j;
-                }
-            }
-        }
-        if best < tol {
-            break;
-        }
-        let app = a[(pi, pi)];
-        let aqq = a[(pj, pj)];
-        let apq = a[(pi, pj)];
-        let theta = (aqq - app) / (2.0 * apq);
-        let t = if theta >= 0.0 {
-            1.0 / (theta + (1.0 + theta * theta).sqrt())
-        } else {
-            1.0 / (theta - (1.0 + theta * theta).sqrt())
-        };
-        let cos = 1.0 / (1.0 + t * t).sqrt();
-        let sin = t * cos;
-        // Apply the rotation to rows/cols pi, pj.
-        for k in 0..n {
-            if k == pi || k == pj {
-                continue;
-            }
-            let aki = a[(k, pi)];
-            let akj = a[(k, pj)];
-            a[(k, pi)] = cos * aki - sin * akj;
-            a[(pi, k)] = a[(k, pi)];
-            a[(k, pj)] = sin * aki + cos * akj;
-            a[(pj, k)] = a[(k, pj)];
-        }
-        a[(pi, pi)] = app - t * apq;
-        a[(pj, pj)] = aqq + t * apq;
-        a[(pi, pj)] = 0.0;
-        a[(pj, pi)] = 0.0;
-    }
-    let mut eigs: Vec<f64> = (0..n).map(|i| a[(i, i)]).collect();
-    eigs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(ArraysD::F64(
-        ArrayD::from_shape_vec(IxDyn(&[n]), eigs).unwrap_or_default(),
-    ))
+    let (vals, _) = eigh(a, vm)?;
+    Ok(vals)
 }
 
-/// `np.linalg.eigh(A)` for a symmetric matrix. Returns (eigenvalues, eigenvectors)
-/// where eigenvectors are columns of the returned matrix.
+/// `np.linalg.eigh(A)` for a symmetric matrix via faer. Returns
+/// (eigenvalues sorted ascending, eigenvectors as columns).
 pub fn eigh(a: &ArraysD, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)> {
     let am = as_f64_2d(a, vm)?;
     let (r, c) = am.dim();
@@ -924,77 +725,19 @@ pub fn eigh(a: &ArraysD, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)> {
         return Err(vm.new_value_error("eigh: matrix must be square".to_string()));
     }
     let n = r;
-    let mut a = am;
-    // Symmetrize.
-    for i in 0..n {
-        for j in (i + 1)..n {
-            let avg = 0.5 * (a[(i, j)] + a[(j, i)]);
-            a[(i, j)] = avg;
-            a[(j, i)] = avg;
-        }
-    }
-    // Accumulator for the rotation matrix V.
-    let mut v = ndarray::Array2::<f64>::eye(n);
-    let tol = 1e-12;
-    let max_sweeps = 100;
-    for _ in 0..max_sweeps {
-        let mut pi = 0usize;
-        let mut pj = 1usize;
-        let mut best = 0.0;
-        for i in 0..n {
-            for j in (i + 1)..n {
-                if a[(i, j)].abs() > best {
-                    best = a[(i, j)].abs();
-                    pi = i;
-                    pj = j;
-                }
-            }
-        }
-        if best < tol {
-            break;
-        }
-        let app = a[(pi, pi)];
-        let aqq = a[(pj, pj)];
-        let apq = a[(pi, pj)];
-        let theta = (aqq - app) / (2.0 * apq);
-        let t = if theta >= 0.0 {
-            1.0 / (theta + (1.0 + theta * theta).sqrt())
-        } else {
-            1.0 / (theta - (1.0 + theta * theta).sqrt())
-        };
-        let cos = 1.0 / (1.0 + t * t).sqrt();
-        let sin = t * cos;
-        for k in 0..n {
-            if k == pi || k == pj {
-                continue;
-            }
-            let aki = a[(k, pi)];
-            let akj = a[(k, pj)];
-            a[(k, pi)] = cos * aki - sin * akj;
-            a[(pi, k)] = a[(k, pi)];
-            a[(k, pj)] = sin * aki + cos * akj;
-            a[(pj, k)] = a[(k, pj)];
-        }
-        a[(pi, pi)] = app - t * apq;
-        a[(pj, pj)] = aqq + t * apq;
-        a[(pi, pj)] = 0.0;
-        a[(pj, pi)] = 0.0;
-        // Update V columns.
-        for k in 0..n {
-            let vki = v[(k, pi)];
-            let vkj = v[(k, pj)];
-            v[(k, pi)] = cos * vki - sin * vkj;
-            v[(k, pj)] = sin * vki + cos * vkj;
-        }
-    }
-    // Sort eigenvalues ascending and reorder eigenvectors.
+    let mat = nd_to_faer(&am);
+    let eig = mat.self_adjoint_eigen(faer::Side::Lower)
+        .map_err(|e| vm.new_value_error(format!("eigh failed: {e:?}")))?;
+    let s = eig.S().column_vector();
+    let u = eig.U();
+    // faer returns eigenvalues ascending already; sort defensively.
     let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&i, &j| a[(i, i)].partial_cmp(&a[(j, j)]).unwrap_or(std::cmp::Ordering::Equal));
-    let eigs: Vec<f64> = order.iter().map(|&i| a[(i, i)]).collect();
+    order.sort_by(|&i, &j| s[i].partial_cmp(&s[j]).unwrap_or(std::cmp::Ordering::Equal));
+    let eigs: Vec<f64> = order.iter().map(|&i| s[i]).collect();
     let mut vec_out = ndarray::Array2::<f64>::zeros((n, n));
     for (new_j, &old_j) in order.iter().enumerate() {
         for k in 0..n {
-            vec_out[(k, new_j)] = v[(k, old_j)];
+            vec_out[(k, new_j)] = u[(k, old_j)];
         }
     }
     Ok((
@@ -1003,31 +746,32 @@ pub fn eigh(a: &ArraysD, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)> {
     ))
 }
 
-/// `np.linalg.eig(A)` — general eigendecomposition. Currently we only support
-/// symmetric A (delegated to eigh). Non-symmetric matrices raise NotImplementedError.
+/// `np.linalg.eig(A)` — general (possibly non-symmetric) eigendecomposition
+/// via faer. Always returns complex128 eigenvalues and eigenvectors, matching
+/// numpy's behavior for real input that has complex eigenvalues.
 pub fn eig(a: &ArraysD, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)> {
     let am = as_f64_2d(a, vm)?;
     let (r, c) = am.dim();
     if r != c {
         return Err(vm.new_value_error("eig: matrix must be square".to_string()));
     }
-    // Heuristic: if symmetric within tolerance, use eigh.
-    let mut max_asym: f64 = 0.0;
-    for i in 0..r {
-        for j in 0..c {
-            let d = (am[(i, j)] - am[(j, i)]).abs();
-            if d > max_asym {
-                max_asym = d;
-            }
+    let n = r;
+    let m = faer::Mat::from_fn(n, n, |i, j| am[(i, j)]);
+    let eigen = m.eigen()
+        .map_err(|e| vm.new_value_error(format!("eig failed: {e:?}")))?;
+    let s = eigen.S().column_vector();
+    let u = eigen.U();
+    let vals: Vec<crate::dtype::C64> = (0..n).map(|i| s[i]).collect();
+    let mut vecs: Vec<crate::dtype::C64> = Vec::with_capacity(n * n);
+    for i in 0..n {
+        for j in 0..n {
+            vecs.push(u[(i, j)]);
         }
     }
-    if max_asym > 1e-10 {
-        return Err(vm.new_not_implemented_error(
-            "linalg.eig: non-symmetric matrices not yet supported (would need complex output)"
-                .to_string(),
-        ));
-    }
-    eigh(a, vm)
+    Ok((
+        ArraysD::C128(ArrayD::from_shape_vec(IxDyn(&[n]), vals).unwrap_or_default()),
+        ArraysD::C128(ArrayD::from_shape_vec(IxDyn(&[n, n]), vecs).unwrap_or_default()),
+    ))
 }
 
 /// `np.linalg.eigvals(A)` — eigenvalues only (general matrix). See `eig`.
@@ -1036,7 +780,8 @@ pub fn eigvals(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     Ok(vals)
 }
 
-/// `np.linalg.slogdet(A)` — (sign, log(|det|)). Computed via LU.
+/// `np.linalg.slogdet(A)` — (sign, log(|det|)). Computed via LU so that the
+/// log-domain accumulation avoids over/underflow for large matrices.
 pub fn slogdet(a: &ArraysD, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)> {
     let m = as_f64_2d(a, vm)?;
     let (r, c) = m.dim();
@@ -1044,44 +789,25 @@ pub fn slogdet(a: &ArraysD, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)>
         return Err(vm.new_value_error("slogdet: matrix must be square".to_string()));
     }
     let n = r;
-    let mut a = m;
-    let mut sign = 1.0f64;
+    let mat = nd_to_faer(&m);
+    let lu = mat.partial_piv_lu();
+    let u = lu.U();
+    let p = lu.P();
+    let (fwd, _) = p.arrays();
+    let mut sign = perm_sign(fwd);
     let mut logabs = 0.0f64;
-    for k in 0..n {
-        let mut pivot = k;
-        let mut best = a[(k, k)].abs();
-        for i in (k + 1)..n {
-            if a[(i, k)].abs() > best {
-                best = a[(i, k)].abs();
-                pivot = i;
-            }
-        }
-        if best == 0.0 {
-            // singular
+    for i in 0..n {
+        let d = u[(i, i)];
+        if d == 0.0 {
             return Ok((
                 ArraysD::F64(ArrayD::from_elem(IxDyn(&[]), 0.0)),
                 ArraysD::F64(ArrayD::from_elem(IxDyn(&[]), f64::NEG_INFINITY)),
             ));
         }
-        if pivot != k {
-            for j in 0..n {
-                let t = a[(k, j)];
-                a[(k, j)] = a[(pivot, j)];
-                a[(pivot, j)] = t;
-            }
+        if d < 0.0 {
             sign = -sign;
         }
-        let pv = a[(k, k)];
-        if pv < 0.0 {
-            sign = -sign;
-        }
-        logabs += pv.abs().ln();
-        for i in (k + 1)..n {
-            let factor = a[(i, k)] / pv;
-            for j in k..n {
-                a[(i, j)] -= factor * a[(k, j)];
-            }
-        }
+        logabs += d.abs().ln();
     }
     Ok((
         ArraysD::F64(ArrayD::from_elem(IxDyn(&[]), sign)),
@@ -1134,8 +860,8 @@ pub fn matrix_power(
     Ok(ArraysD::F64(acc.into_dyn()))
 }
 
-/// `np.linalg.svd(A, full_matrices=True)` — singular value decomposition.
-/// Returns (U, Σ, V^H) where A = U Σ V^H. Computed via eigh(A^T A).
+/// `np.linalg.svd(A, full_matrices=True)` — singular value decomposition via
+/// faer. Returns (U, Σ, V^H) where A = U Σ V^H.
 pub fn svd(
     a: &ArraysD,
     full_matrices: bool,
@@ -1143,85 +869,31 @@ pub fn svd(
 ) -> PyResult<(ArraysD, ArraysD, ArraysD)> {
     let am = as_f64_2d(a, vm)?;
     let (m, n) = am.dim();
-    // Compute A^T A (n×n, symmetric PSD).
-    let at = am.t();
-    let ata = at.dot(&am); // n×n
-    let ata_arr = ArraysD::F64(ata.into_dyn());
-    let (eigs, v_mat) = eigh(&ata_arr, vm)?;
-    // eigh returns eigenvalues ascending; reverse to descending (numpy svd order).
-    use crate::dtype::CoerceArray;
-    let eig_vec: Vec<f64> = eigs.coerce::<f64>().iter().copied().collect();
-    let mut idx: Vec<usize> = (0..eig_vec.len()).collect();
-    idx.sort_by(|&i, &j| eig_vec[j].partial_cmp(&eig_vec[i]).unwrap_or(std::cmp::Ordering::Equal));
-    let sigma: Vec<f64> = idx
-        .iter()
-        .map(|&i| eig_vec[i].max(0.0).sqrt())
-        .collect();
-    // Reorder V columns according to idx.
-    let v_owned: ndarray::Array2<f64> = v_mat
-        .coerce::<f64>()
-        .into_dimensionality::<ndarray::Ix2>()
-        .map_err(|e| crate::internal::internal(vm, format!("svd v: {e}")))?;
-    let mut v_sorted = ndarray::Array2::<f64>::zeros((n, n));
-    for (new_col, &old_col) in idx.iter().enumerate() {
-        for row in 0..n {
-            v_sorted[(row, new_col)] = v_owned[(row, old_col)];
-        }
-    }
-    // Compute U columns = A * V[:, k] / σ_k for σ_k > 0.
-    // If m < n, only m singular values exist; trim.
     let k = m.min(n);
-    let mut u = ndarray::Array2::<f64>::zeros((m, if full_matrices { m } else { k }));
-    for j in 0..k.min(if full_matrices { m } else { k }) {
-        let s = sigma[j];
-        if s > 1e-12 {
-            let v_col = v_sorted.column(j);
-            let av = am.dot(&v_col);
-            for i in 0..m {
-                u[(i, j)] = av[i] / s;
-            }
-        }
-    }
-    // Fill remaining U columns (full_matrices and k < m): use Gram-Schmidt
-    // against existing columns.
-    if full_matrices && k < m {
-        for j in k..m {
-            // Start with standard basis vector e_j, then orthogonalize.
-            let mut new_col = ndarray::Array1::<f64>::zeros(m);
-            new_col[j] = 1.0;
-            for prev in 0..j {
-                let prev_col = u.column(prev);
-                let dot: f64 = prev_col.iter().zip(new_col.iter()).map(|(a, b)| a * b).sum();
-                for i in 0..m {
-                    new_col[i] -= dot * prev_col[i];
-                }
-            }
-            let nrm = new_col.iter().map(|x| x * x).sum::<f64>().sqrt();
-            if nrm > 1e-12 {
-                for i in 0..m {
-                    u[(i, j)] = new_col[i] / nrm;
-                }
-            }
-        }
-    }
-    // sigma slice (only the m.min(n) entries are meaningful).
-    let sigma_out: Vec<f64> = sigma.iter().take(k).copied().collect();
-    // V^H is the *transpose* of V (real case).
-    let vh = if full_matrices {
-        v_sorted.t().to_owned()
+    let mat = nd_to_faer(&am);
+    let svd = if full_matrices {
+        mat.svd()
     } else {
-        // Take first k columns of V → transpose to get rows.
-        let mut v_trim = ndarray::Array2::<f64>::zeros((k, n));
-        for j in 0..k {
-            for row in 0..n {
-                v_trim[(j, row)] = v_sorted[(row, j)];
-            }
+        mat.thin_svd()
+    }
+    .map_err(|e| vm.new_value_error(format!("svd failed: {e:?}")))?;
+    let u_ref = svd.U();
+    let v_ref = svd.V();
+    let s_ref = svd.S().column_vector();
+    let u = faer_to_nd(u_ref);
+    // V is (n, k) in thin / (n, n) in full. numpy wants V^H of shape (k, n) or (n, n).
+    let v_rows = v_ref.nrows();
+    let v_cols = v_ref.ncols();
+    let mut vh = ndarray::Array2::<f64>::zeros((v_cols, v_rows));
+    for i in 0..v_rows {
+        for j in 0..v_cols {
+            vh[(j, i)] = v_ref[(i, j)];
         }
-        v_trim
-    };
+    }
+    let sigma: Vec<f64> = (0..k).map(|i| s_ref[i]).collect();
     Ok((
         ArraysD::F64(u.into_dyn()),
-        ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[k]), sigma_out).unwrap_or_default()),
+        ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[k]), sigma).unwrap_or_default()),
         ArraysD::F64(vh.into_dyn()),
     ))
 }
@@ -1247,4 +919,18 @@ pub fn cross(a: &ArraysD, b: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD>
         a[0] * b[1] - a[1] * b[0],
     ];
     Ok(ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[3]), out).unwrap_or_default()))
+}
+
+/// Singular values of a row-major `rows x cols` matrix via faer's thin SVD.
+fn singular_values(
+    data: &[f64],
+    rows: usize,
+    cols: usize,
+    vm: &VirtualMachine,
+) -> PyResult<Vec<f64>> {
+    let m = faer::Mat::<f64>::from_fn(rows, cols, |r, c| data[r * cols + c]);
+    let svd = m.thin_svd()
+        .map_err(|e| vm.new_value_error(format!("svd failed: {e:?}")))?;
+    let s = svd.S().column_vector();
+    Ok((0..s.nrows()).map(|i| s[i]).collect())
 }

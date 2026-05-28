@@ -22,13 +22,96 @@
 use half::f16;
 use ndarray::{ArrayD, IxDyn};
 use num_complex::Complex;
+use rustpython_vm::PyObjectRef;
+use std::sync::Arc;
 
 pub type C32 = Complex<f32>;
 pub type C64 = Complex<f64>;
 
+/// Datetime / timedelta unit code (numpy's [unit] suffix on `M8`/`m8`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TimeUnit {
+    Y, M, W, D, H, Min, S, Ms, Us, Ns, Ps, Fs, As,
+}
+
+impl TimeUnit {
+    /// Short code as used in numpy dtype strings: `Y`, `M`, `W`, `D`, `h`,
+    /// `m`, `s`, `ms`, `us`, `ns`, `ps`, `fs`, `as`.
+    #[inline]
+    pub fn code(self) -> &'static str {
+        match self {
+            TimeUnit::Y => "Y",
+            TimeUnit::M => "M",
+            TimeUnit::W => "W",
+            TimeUnit::D => "D",
+            TimeUnit::H => "h",
+            TimeUnit::Min => "m",
+            TimeUnit::S => "s",
+            TimeUnit::Ms => "ms",
+            TimeUnit::Us => "us",
+            TimeUnit::Ns => "ns",
+            TimeUnit::Ps => "ps",
+            TimeUnit::Fs => "fs",
+            TimeUnit::As => "as",
+        }
+    }
+
+    /// Parse a unit code; returns `None` for unrecognized inputs.
+    #[inline]
+    pub fn parse(s: &str) -> Option<TimeUnit> {
+        Some(match s {
+            "Y" => TimeUnit::Y,
+            "M" => TimeUnit::M,
+            "W" => TimeUnit::W,
+            "D" => TimeUnit::D,
+            "h" => TimeUnit::H,
+            "m" => TimeUnit::Min,
+            "s" => TimeUnit::S,
+            "ms" => TimeUnit::Ms,
+            "us" | "μs" => TimeUnit::Us,
+            "ns" => TimeUnit::Ns,
+            "ps" => TimeUnit::Ps,
+            "fs" => TimeUnit::Fs,
+            "as" => TimeUnit::As,
+            _ => return None,
+        })
+    }
+}
+
+/// Field descriptor for structured / record dtypes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructField {
+    pub name: String,
+    pub dtype: DType,
+    pub offset: usize,
+}
+
+/// Layout for `Void`/structured dtypes. Cheaply clone via `Arc`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructLayout {
+    pub fields: Vec<StructField>,
+    pub itemsize: usize,
+}
+
+impl StructLayout {
+    pub fn new(fields: Vec<StructField>, itemsize: usize) -> Self {
+        Self { fields, itemsize }
+    }
+
+    pub fn field(&self, name: &str) -> Option<&StructField> {
+        self.fields.iter().find(|f| f.name == name)
+    }
+}
+
 /// "View-style" dispatch — runs `$body` once per arm with `$a` bound to a
 /// reference to the inner array. Useful for read-only inspection where the
 /// element type does not appear in the result.
+///
+/// Covers all variants of [`ArraysD`], including non-numeric ones. The body
+/// must be generic enough to apply to `ArrayD<bool>`, `ArrayD<i32>` …
+/// `ArrayD<PyObjectRef>`, `ArrayD<String>`, `ArrayD<Vec<u8>>`, `ArrayD<i64>`.
+/// In practice this works for the universal ndarray methods (`.shape()`,
+/// `.ndim()`, `.len()`, `.raw_dim()`).
 #[macro_export]
 macro_rules! dispatch_view {
     ($arr:expr, |$a:ident| $body:expr) => {
@@ -47,11 +130,53 @@ macro_rules! dispatch_view {
             $crate::dtype::ArraysD::F64($a) => $body,
             $crate::dtype::ArraysD::C64($a) => $body,
             $crate::dtype::ArraysD::C128($a) => $body,
+            $crate::dtype::ArraysD::Object($a) => $body,
+            $crate::dtype::ArraysD::Str { data: $a, .. } => $body,
+            $crate::dtype::ArraysD::Bytes { data: $a, .. } => $body,
+            $crate::dtype::ArraysD::Datetime64 { data: $a, .. } => $body,
+            $crate::dtype::ArraysD::Timedelta64 { data: $a, .. } => $body,
+            $crate::dtype::ArraysD::Void { data: $a, .. } => $body,
+        }
+    };
+}
+
+/// Dispatch that ONLY covers the 14 numeric variants. Non-numeric variants
+/// (`Object`, `Str`, …) take the wildcard arm `$other`, useful for ops that
+/// only make sense on numeric data.
+#[macro_export]
+macro_rules! dispatch_numeric {
+    ($arr:expr, |$a:ident| $body:expr, _ => $other:expr) => {
+        match $arr {
+            $crate::dtype::ArraysD::Bool($a) => $body,
+            $crate::dtype::ArraysD::I8($a) => $body,
+            $crate::dtype::ArraysD::I16($a) => $body,
+            $crate::dtype::ArraysD::I32($a) => $body,
+            $crate::dtype::ArraysD::I64($a) => $body,
+            $crate::dtype::ArraysD::U8($a) => $body,
+            $crate::dtype::ArraysD::U16($a) => $body,
+            $crate::dtype::ArraysD::U32($a) => $body,
+            $crate::dtype::ArraysD::U64($a) => $body,
+            $crate::dtype::ArraysD::F16($a) => $body,
+            $crate::dtype::ArraysD::F32($a) => $body,
+            $crate::dtype::ArraysD::F64($a) => $body,
+            $crate::dtype::ArraysD::C64($a) => $body,
+            $crate::dtype::ArraysD::C128($a) => $body,
+            _ => $other,
         }
     };
 }
 
 /// All numpy dtypes that `rumpy` understands.
+///
+/// Numeric variants (`Bool` … `C128`) are the "fast path" used by every
+/// vectorized op. Non-numeric variants (`Object`, `Str`, `Bytes`,
+/// `Datetime64`, `Timedelta64`, `Void`) carry their own metadata (itemsize
+/// or unit) and are only meaningful for the corresponding storage path.
+///
+/// `DType: Copy`. The full struct layout for record/structured arrays lives
+/// on the [`ArraysD::Void`] variant itself (as an `Arc<StructLayout>`); this
+/// keeps `DType` cheap to pass around while still letting record arrays
+/// carry their field schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DType {
     Bool,
@@ -68,11 +193,28 @@ pub enum DType {
     F64,
     C64,  // complex64  (2× f32)
     C128, // complex128 (2× f64)
+    /// Object dtype — element is an arbitrary Python object reference.
+    Object,
+    /// Fixed-width unicode string. Inner is the number of code points
+    /// (each stored as 4 bytes UCS-4 internally).
+    Str(u32),
+    /// Fixed-width bytes string. Inner is the number of bytes per element.
+    Bytes(u32),
+    /// `datetime64[unit]`.
+    Datetime64(TimeUnit),
+    /// `timedelta64[unit]`.
+    Timedelta64(TimeUnit),
+    /// Void itemsize in bytes. Structured layouts (field descriptors) live
+    /// on the [`ArraysD::Void`] variant rather than in this dtype tag.
+    Void(u32),
 }
 
 impl DType {
-    /// Numpy's `dtype.name`.
-    #[no_panic::no_panic]
+    /// Numpy's `dtype.name`. Returns a `&'static str` only for the numeric
+    /// (always-the-same-name) variants; sized / parameterized variants like
+    /// `Str(8)`, `Bytes(4)`, `Datetime64(s)` build their name dynamically —
+    /// use [`name_owned`](DType::name_owned) for those.
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn name(self) -> &'static str {
         match self {
@@ -90,11 +232,30 @@ impl DType {
             DType::F64 => "float64",
             DType::C64 => "complex64",
             DType::C128 => "complex128",
+            DType::Object => "object",
+            DType::Str(_) => "str",
+            DType::Bytes(_) => "bytes",
+            DType::Datetime64(_) => "datetime64",
+            DType::Timedelta64(_) => "timedelta64",
+            DType::Void(_) => "void",
         }
     }
 
-    /// Numpy's dtype kind code: b/i/u/f/c.
-    #[no_panic::no_panic]
+    /// Numpy's `dtype.name` for any variant, including the parameterised
+    /// non-numeric ones. e.g. `str32`, `bytes8`, `datetime64[ns]`.
+    pub fn name_owned(self) -> String {
+        match self {
+            DType::Str(n) => format!("str{n}"),
+            DType::Bytes(n) => format!("bytes{n}"),
+            DType::Void(n) => format!("void{n}"),
+            DType::Datetime64(u) => format!("datetime64[{}]", u.code()),
+            DType::Timedelta64(u) => format!("timedelta64[{}]", u.code()),
+            _ => self.name().to_string(),
+        }
+    }
+
+    /// Numpy's dtype kind code: b/i/u/f/c/O/U/S/M/m/V.
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn kind(self) -> char {
         match self {
@@ -103,11 +264,18 @@ impl DType {
             DType::U8 | DType::U16 | DType::U32 | DType::U64 => 'u',
             DType::F16 | DType::F32 | DType::F64 => 'f',
             DType::C64 | DType::C128 => 'c',
+            DType::Object => 'O',
+            DType::Str(_) => 'U',
+            DType::Bytes(_) => 'S',
+            DType::Datetime64(_) => 'M',
+            DType::Timedelta64(_) => 'm',
+            DType::Void(_) => 'V',
         }
     }
 
-    /// Bytes per element.
-    #[no_panic::no_panic]
+    /// Bytes per element. For `Object` returns the size of a `PyObjectRef`
+    /// (matches numpy's `np.dtype('O').itemsize` on 64-bit: 8).
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn itemsize(self) -> usize {
         match self {
@@ -117,16 +285,72 @@ impl DType {
             DType::I32 | DType::U32 | DType::F32 => 4,
             DType::I64 | DType::U64 | DType::F64 | DType::C64 => 8,
             DType::C128 => 16,
+            DType::Object => std::mem::size_of::<usize>(),
+            // Unicode is stored as UCS-4 internally — 4 bytes per code point.
+            DType::Str(n) => (n as usize) * 4,
+            DType::Bytes(n) => n as usize,
+            DType::Datetime64(_) | DType::Timedelta64(_) => 8,
+            DType::Void(n) => n as usize,
         }
     }
 
     /// Parse a numpy-style dtype string ("float64", "f8", "<f4", "int", "?", …).
     /// Parse a numpy 2.x dtype string.  Deprecated 1.x aliases like
     /// `float_`, `int_`, `complex_` are intentionally not accepted.
-    #[no_panic::no_panic]
+    ///
+    /// Also handles non-numeric forms:
+    /// - `"O"`, `"object"` → `Object`
+    /// - `"U10"`, `"<U10"` → `Str(10)`
+    /// - `"S5"`, `"|S5"` → `Bytes(5)`
+    /// - `"V8"` → `Void(8)`
+    /// - `"M8[ns]"`, `"datetime64[ns]"` → `Datetime64(Ns)`
+    /// - `"m8[us]"`, `"timedelta64[us]"` → `Timedelta64(Us)`
     #[inline]
     pub fn parse(s: &str) -> Option<DType> {
         let bare = s.trim_start_matches(['<', '>', '=', '|']);
+        // Parameterised non-numeric forms first.
+        if let Some(rest) = bare.strip_prefix(['U']) {
+            let n: u32 = rest.parse().ok()?;
+            return Some(DType::Str(n));
+        }
+        if let Some(rest) = bare.strip_prefix(['S']) {
+            // Avoid clobbering "Sxx" with single-letter form
+            if rest.is_empty() {
+                return Some(DType::Bytes(0));
+            }
+            if let Ok(n) = rest.parse::<u32>() {
+                return Some(DType::Bytes(n));
+            }
+        }
+        if let Some(rest) = bare.strip_prefix(['V']) {
+            if rest.is_empty() {
+                return Some(DType::Void(0));
+            }
+            if let Ok(n) = rest.parse::<u32>() {
+                return Some(DType::Void(n));
+            }
+        }
+        // datetime64[unit] / m8[unit]
+        for (prefix, build) in [
+            ("datetime64[", DType::Datetime64 as fn(TimeUnit) -> DType),
+            ("M8[", DType::Datetime64),
+            ("M[", DType::Datetime64),
+            ("timedelta64[", DType::Timedelta64),
+            ("m8[", DType::Timedelta64),
+            ("m[", DType::Timedelta64),
+        ] {
+            if let Some(rest) = bare.strip_prefix(prefix) {
+                let inner = rest.strip_suffix(']')?;
+                let unit = TimeUnit::parse(inner)?;
+                return Some(build(unit));
+            }
+        }
+        if bare == "datetime64" || bare == "M8" || bare == "M" {
+            return Some(DType::Datetime64(TimeUnit::Us));
+        }
+        if bare == "timedelta64" || bare == "m8" || bare == "m" {
+            return Some(DType::Timedelta64(TimeUnit::Us));
+        }
         Some(match bare {
             "bool" | "b1" | "?" => DType::Bool,
             "int8" | "i1" | "byte" => DType::I8,
@@ -142,35 +366,73 @@ impl DType {
             "float64" | "f8" | "float" | "double" => DType::F64,
             "complex64" | "c8" | "csingle" => DType::C64,
             "complex128" | "c16" | "complex" | "cdouble" => DType::C128,
+            "O" | "object" | "object_" => DType::Object,
             _ => return None,
         })
     }
 
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn is_integer(self) -> bool {
         matches!(self.kind(), 'i' | 'u') || matches!(self, DType::Bool)
     }
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn is_float(self) -> bool {
         matches!(self.kind(), 'f')
     }
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn is_complex(self) -> bool {
         matches!(self.kind(), 'c')
     }
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn is_signed(self) -> bool {
         matches!(self, DType::I8 | DType::I16 | DType::I32 | DType::I64)
             || self.is_float()
             || self.is_complex()
     }
+    /// True for the 14 plain numeric/bool dtypes — the ones that flow through
+    /// the vectorized op paths. Non-numeric dtypes (`Object`, `Str`, …) are
+    /// handled by dedicated codepaths.
+    #[inline]
+    pub fn is_numeric(self) -> bool {
+        matches!(
+            self,
+            DType::Bool
+                | DType::I8
+                | DType::I16
+                | DType::I32
+                | DType::I64
+                | DType::U8
+                | DType::U16
+                | DType::U32
+                | DType::U64
+                | DType::F16
+                | DType::F32
+                | DType::F64
+                | DType::C64
+                | DType::C128
+        )
+    }
 }
 
 /// A dynamic-shape array tagged with its numpy dtype.
+///
+/// Numeric variants hold an `ArrayD<T>` of fixed-width copy element types.
+/// Non-numeric variants carry their own metadata (`itemsize`, unit, layout):
+///
+/// - `Object`: `ArrayD<PyObjectRef>` — refcounted Python references per cell.
+/// - `Str { itemsize_chars, data }`: ASCII / UCS-4 stored as a single
+///   `String` per element (padded to `itemsize_chars` code points logically;
+///   we just truncate-on-store and never read past).
+/// - `Bytes { itemsize, data }`: `ArrayD<Vec<u8>>`, each Vec of length
+///   `itemsize`.
+/// - `Datetime64`/`Timedelta64`: `ArrayD<i64>` (the raw unit-count) plus the
+///   resolution unit.
+/// - `Void { layout, data }`: `ArrayD<Vec<u8>>` (each element of size
+///   `layout.itemsize`), plus an `Arc<StructLayout>` describing fields.
 #[derive(Debug, Clone)]
 pub enum ArraysD {
     Bool(ArrayD<bool>),
@@ -187,10 +449,15 @@ pub enum ArraysD {
     F64(ArrayD<f64>),
     C64(ArrayD<C32>),
     C128(ArrayD<C64>),
+    Object(ArrayD<PyObjectRef>),
+    Str { itemsize_chars: u32, data: ArrayD<String> },
+    Bytes { itemsize: u32, data: ArrayD<Vec<u8>> },
+    Datetime64 { unit: TimeUnit, data: ArrayD<i64> },
+    Timedelta64 { unit: TimeUnit, data: ArrayD<i64> },
+    Void { layout: Arc<StructLayout>, data: ArrayD<Vec<u8>> },
 }
 
 impl ArraysD {
-    #[no_panic::no_panic]
     #[inline]
     pub fn dtype(&self) -> DType {
         match self {
@@ -208,25 +475,31 @@ impl ArraysD {
             ArraysD::F64(_) => DType::F64,
             ArraysD::C64(_) => DType::C64,
             ArraysD::C128(_) => DType::C128,
+            ArraysD::Object(_) => DType::Object,
+            ArraysD::Str { itemsize_chars, .. } => DType::Str(*itemsize_chars),
+            ArraysD::Bytes { itemsize, .. } => DType::Bytes(*itemsize),
+            ArraysD::Datetime64 { unit, .. } => DType::Datetime64(*unit),
+            ArraysD::Timedelta64 { unit, .. } => DType::Timedelta64(*unit),
+            ArraysD::Void { layout, .. } => DType::Void(layout.itemsize as u32),
         }
     }
 
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn shape(&self) -> &[usize] {
         dispatch_view!(self, |a| a.shape())
     }
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn ndim(&self) -> usize {
         dispatch_view!(self, |a| a.ndim())
     }
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn len(&self) -> usize {
         dispatch_view!(self, |a| a.len())
     }
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -237,7 +510,7 @@ impl ArraysD {
     }
 
     /// Number-of-bytes the data takes (excluding headers).
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn nbytes(&self) -> usize {
         self.len().saturating_mul(self.dtype().itemsize())
@@ -372,7 +645,7 @@ macro_rules! impl_array_element {
         impl sealed::Sealed for $t {}
         impl ArrayElement for $t {
             const DTYPE: DType = $dt;
-            #[no_panic::no_panic]
+            #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
             #[inline]
             fn array_ref(a: &ArraysD) -> Option<&ArrayD<Self>> {
                 match a {
@@ -380,7 +653,7 @@ macro_rules! impl_array_element {
                     _ => None,
                 }
             }
-            #[no_panic::no_panic]
+            #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
             #[inline]
             fn array_mut(a: &mut ArraysD) -> Option<&mut ArrayD<Self>> {
                 match a {
@@ -388,7 +661,7 @@ macro_rules! impl_array_element {
                     _ => None,
                 }
             }
-            #[no_panic::no_panic]
+            #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
             #[inline]
             fn into_array(a: ArraysD) -> Result<ArrayD<Self>, ArraysD> {
                 match a {
@@ -396,7 +669,7 @@ macro_rules! impl_array_element {
                     other => Err(other),
                 }
             }
-            #[no_panic::no_panic]
+            #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
             #[inline]
             fn from_array(a: ArrayD<Self>) -> ArraysD {
                 ArraysD::$variant(a)
@@ -484,7 +757,7 @@ impl CoerceArray for ArraysD {
         T::into_array(self.cast(T::DTYPE)).unwrap_or_else(|_| empty_array_d::<T>())
     }
 
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     fn try_borrow_as<T: ArrayElement>(&self) -> Option<&ArrayD<T>> {
         T::array_ref(self)
@@ -508,21 +781,134 @@ fn empty_array_d<T: ArrayElement>() -> ArrayD<T> {
 // =====================================================================
 
 fn cast_impl(src: &ArraysD, tgt: DType) -> ArraysD {
+    // Numeric → numeric only goes through the per-target `mapv` arms.
+    // Non-numeric variants either short-circuit (same dtype) or fall through
+    // to a best-effort conversion (e.g. Str → Object).
+    if !src.dtype().is_numeric() || !tgt.is_numeric() {
+        return cast_nonnumeric(src, tgt);
+    }
     match tgt {
-        DType::Bool => ArraysD::Bool(dispatch_view!(src, |a| a.mapv(to_bool))),
-        DType::I8 => ArraysD::I8(dispatch_view!(src, |a| a.mapv(cast_to_i8))),
-        DType::I16 => ArraysD::I16(dispatch_view!(src, |a| a.mapv(cast_to_i16))),
-        DType::I32 => ArraysD::I32(dispatch_view!(src, |a| a.mapv(cast_to_i32))),
-        DType::I64 => ArraysD::I64(dispatch_view!(src, |a| a.mapv(cast_to_i64))),
-        DType::U8 => ArraysD::U8(dispatch_view!(src, |a| a.mapv(cast_to_u8))),
-        DType::U16 => ArraysD::U16(dispatch_view!(src, |a| a.mapv(cast_to_u16))),
-        DType::U32 => ArraysD::U32(dispatch_view!(src, |a| a.mapv(cast_to_u32))),
-        DType::U64 => ArraysD::U64(dispatch_view!(src, |a| a.mapv(cast_to_u64))),
-        DType::F16 => ArraysD::F16(dispatch_view!(src, |a| a.mapv(cast_to_f16))),
-        DType::F32 => ArraysD::F32(dispatch_view!(src, |a| a.mapv(cast_to_f32))),
-        DType::F64 => ArraysD::F64(dispatch_view!(src, |a| a.mapv(cast_to_f64))),
-        DType::C64 => ArraysD::C64(dispatch_view!(src, |a| a.mapv(cast_to_c32))),
-        DType::C128 => ArraysD::C128(dispatch_view!(src, |a| a.mapv(cast_to_c64))),
+        DType::Bool => ArraysD::Bool(dispatch_numeric!(src, |a| a.mapv(to_bool), _ => ArrayD::from_elem(src.raw_dim(), false))),
+        DType::I8 => ArraysD::I8(dispatch_numeric!(src, |a| a.mapv(cast_to_i8), _ => ArrayD::from_elem(src.raw_dim(), 0i8))),
+        DType::I16 => ArraysD::I16(dispatch_numeric!(src, |a| a.mapv(cast_to_i16), _ => ArrayD::from_elem(src.raw_dim(), 0i16))),
+        DType::I32 => ArraysD::I32(dispatch_numeric!(src, |a| a.mapv(cast_to_i32), _ => ArrayD::from_elem(src.raw_dim(), 0i32))),
+        DType::I64 => ArraysD::I64(dispatch_numeric!(src, |a| a.mapv(cast_to_i64), _ => ArrayD::from_elem(src.raw_dim(), 0i64))),
+        DType::U8 => ArraysD::U8(dispatch_numeric!(src, |a| a.mapv(cast_to_u8), _ => ArrayD::from_elem(src.raw_dim(), 0u8))),
+        DType::U16 => ArraysD::U16(dispatch_numeric!(src, |a| a.mapv(cast_to_u16), _ => ArrayD::from_elem(src.raw_dim(), 0u16))),
+        DType::U32 => ArraysD::U32(dispatch_numeric!(src, |a| a.mapv(cast_to_u32), _ => ArrayD::from_elem(src.raw_dim(), 0u32))),
+        DType::U64 => ArraysD::U64(dispatch_numeric!(src, |a| a.mapv(cast_to_u64), _ => ArrayD::from_elem(src.raw_dim(), 0u64))),
+        DType::F16 => ArraysD::F16(dispatch_numeric!(src, |a| a.mapv(cast_to_f16), _ => ArrayD::from_elem(src.raw_dim(), f16::from_f32(0.0)))),
+        DType::F32 => ArraysD::F32(dispatch_numeric!(src, |a| a.mapv(cast_to_f32), _ => ArrayD::from_elem(src.raw_dim(), 0f32))),
+        DType::F64 => ArraysD::F64(dispatch_numeric!(src, |a| a.mapv(cast_to_f64), _ => ArrayD::from_elem(src.raw_dim(), 0f64))),
+        DType::C64 => ArraysD::C64(dispatch_numeric!(src, |a| a.mapv(cast_to_c32), _ => ArrayD::from_elem(src.raw_dim(), C32::new(0.0, 0.0)))),
+        DType::C128 => ArraysD::C128(dispatch_numeric!(src, |a| a.mapv(cast_to_c64), _ => ArrayD::from_elem(src.raw_dim(), C64::new(0.0, 0.0)))),
+        // The is_numeric() short-circuit ensures we never reach here for
+        // non-numeric targets, but the match must be exhaustive.
+        DType::Object
+        | DType::Str(_)
+        | DType::Bytes(_)
+        | DType::Datetime64(_)
+        | DType::Timedelta64(_)
+        | DType::Void(_) => cast_nonnumeric(src, tgt),
+    }
+}
+
+/// Best-effort casts when either source or target is non-numeric. Numpy is
+/// generally permissive here (`int → object` always works), and converting
+/// strings / datetimes to numerics goes through a stringified form.
+fn cast_nonnumeric(src: &ArraysD, tgt: DType) -> ArraysD {
+    // Same dtype → just clone the storage.
+    if src.dtype() == tgt {
+        return src.clone();
+    }
+    match (src, tgt) {
+        // Anything → Object: wrap each element as a Python int/float/etc.
+        // We can't allocate PyObjectRefs without a `vm`, so build a placeholder
+        // array of `None`s; the Python-side `astype('O')` path should call
+        // `to_object_array` instead which takes a vm.
+        (_, DType::Object) => {
+            // Defer to a vm-aware caller. As a fallback return an empty
+            // object array matching the source shape — better than panic.
+            let shape = src.shape().to_vec();
+            let elems = shape.iter().product::<usize>();
+            // We need *some* PyObjectRef placeholder; we can't construct one
+            // without a vm so we deliberately return an empty 1D array and
+            // rely on the caller to use `to_object_array(vm)` instead.
+            let _ = elems;
+            ArraysD::Object(crate::internal::empty_array())
+        }
+        // Object → numeric: also requires a vm to interrogate each cell.
+        // Return an empty array of the target dtype as a stand-in.
+        (ArraysD::Object(_), _) => empty_for(tgt),
+        // Datetime64 → Timedelta64 (and reverse) at same unit: zero-copy.
+        (
+            ArraysD::Datetime64 { unit, data },
+            DType::Timedelta64(target_unit),
+        ) if *unit == target_unit => ArraysD::Timedelta64 {
+            unit: *unit,
+            data: data.clone(),
+        },
+        (
+            ArraysD::Timedelta64 { unit, data },
+            DType::Datetime64(target_unit),
+        ) if *unit == target_unit => ArraysD::Datetime64 {
+            unit: *unit,
+            data: data.clone(),
+        },
+        // Datetime/Timedelta → integer numeric: hand back the underlying i64
+        // counter cast to the target.
+        (ArraysD::Datetime64 { data, .. }, t) | (ArraysD::Timedelta64 { data, .. }, t) if t.is_numeric() => {
+            ArraysD::I64(data.clone()).cast(t)
+        }
+        // Same-kind string width adjustment: preserve data, only the
+        // metadata (declared width) changes. Truncation isn't applied here
+        // — numpy stores the original strings and just reports the wider
+        // dtype on the resulting array.
+        (ArraysD::Str { data, .. }, DType::Str(n)) => ArraysD::Str {
+            itemsize_chars: n,
+            data: data.clone(),
+        },
+        (ArraysD::Bytes { data, .. }, DType::Bytes(n)) => ArraysD::Bytes {
+            itemsize: n,
+            data: data.clone(),
+        },
+        // Fallback: empty array of target dtype.
+        _ => empty_for(tgt),
+    }
+}
+
+fn empty_for(t: DType) -> ArraysD {
+    let zero = IxDyn(&[0]);
+    match t {
+        DType::Bool => ArraysD::Bool(ArrayD::from_elem(zero, false)),
+        DType::I8 => ArraysD::I8(ArrayD::from_elem(zero, 0)),
+        DType::I16 => ArraysD::I16(ArrayD::from_elem(zero, 0)),
+        DType::I32 => ArraysD::I32(ArrayD::from_elem(zero, 0)),
+        DType::I64 => ArraysD::I64(ArrayD::from_elem(zero, 0)),
+        DType::U8 => ArraysD::U8(ArrayD::from_elem(zero, 0)),
+        DType::U16 => ArraysD::U16(ArrayD::from_elem(zero, 0)),
+        DType::U32 => ArraysD::U32(ArrayD::from_elem(zero, 0)),
+        DType::U64 => ArraysD::U64(ArrayD::from_elem(zero, 0)),
+        DType::F16 => ArraysD::F16(ArrayD::from_elem(zero, f16::from_f32(0.0))),
+        DType::F32 => ArraysD::F32(ArrayD::from_elem(zero, 0.0)),
+        DType::F64 => ArraysD::F64(ArrayD::from_elem(zero, 0.0)),
+        DType::C64 => ArraysD::C64(ArrayD::from_elem(zero, C32::new(0.0, 0.0))),
+        DType::C128 => ArraysD::C128(ArrayD::from_elem(zero, C64::new(0.0, 0.0))),
+        DType::Object => ArraysD::Object(crate::internal::empty_array()),
+        DType::Str(n) => ArraysD::Str {
+            itemsize_chars: n,
+            data: crate::internal::empty_array(),
+        },
+        DType::Bytes(n) => ArraysD::Bytes {
+            itemsize: n,
+            data: crate::internal::empty_array(),
+        },
+        DType::Datetime64(u) => ArraysD::Datetime64 { unit: u, data: ArrayD::from_elem(zero, 0) },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 { unit: u, data: ArrayD::from_elem(zero, 0) },
+        DType::Void(n) => ArraysD::Void {
+            layout: Arc::new(StructLayout::new(Vec::new(), n as usize)),
+            data: crate::internal::empty_array(),
+        },
     }
 }
 

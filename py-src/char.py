@@ -212,6 +212,71 @@ def compare_chararrays(a, b, cmp_op, _rstrip=True):
     return [op(x, y) for x, y in zip(a, b)]
 
 
+def isalnum(x):
+    return _map(x, str.isalnum)
+
+
+def istitle(x):
+    return _map(x, str.istitle)
+
+
+def partition(x, sep):
+    return [a.partition(sep) for a in x]
+
+
+def rpartition(x, sep):
+    return [a.rpartition(sep) for a in x]
+
+
+def translate(x, table, deletechars=None):
+    _ = deletechars
+    return [a.translate(table) for a in x]
+
+
+def array(obj, itemsize=None, copy=True, unicode=None, order=None):
+    """Best-effort ``np.char.array`` — returns the input as a Python list."""
+    _ = (itemsize, copy, unicode, order)
+    if isinstance(obj, (list, tuple)):
+        return list(obj)
+    return [obj]
+
+
+def asarray(obj, itemsize=None, unicode=None, order=None):
+    """Best-effort ``np.char.asarray`` — equivalent to ``array(obj)``."""
+    return array(obj, itemsize=itemsize, unicode=unicode, order=order)
+
+
+class chararray(list):
+    """A simple ``list``-backed string array.
+
+    Real numpy's ``chararray`` is a string-typed ndarray subclass; rumpy
+    has no string dtype, so we fall back to a ``list`` that supports the
+    element-wise string operations declared above as methods.
+    """
+
+    def __new__(cls, shape, itemsize=1, unicode=True, buffer=None,
+                offset=0, strides=None, order=None):
+        _ = (itemsize, unicode, buffer, offset, strides, order)
+        if isinstance(shape, int):
+            n = shape
+        else:
+            n = 1
+            for d in shape:
+                n *= d
+        return list.__new__(cls)
+
+    def __init__(self, shape, itemsize=1, unicode=True, buffer=None,
+                 offset=0, strides=None, order=None):
+        _ = (itemsize, unicode, buffer, offset, strides, order)
+        if isinstance(shape, int):
+            n = shape
+        else:
+            n = 1
+            for d in shape:
+                n *= d
+        super().__init__(["" for _ in range(n)])
+
+
 __all__ = [
     "add", "multiply", "mod",
     "capitalize", "title", "upper", "lower", "swapcase",
@@ -219,10 +284,12 @@ __all__ = [
     "split", "rsplit", "splitlines", "join", "replace",
     "startswith", "endswith",
     "count", "find", "rfind", "index", "rindex",
-    "isalpha", "isdigit", "isspace", "isupper", "islower",
-    "isnumeric", "isdecimal",
+    "isalnum", "isalpha", "isdigit", "isspace", "isupper", "islower",
+    "isnumeric", "isdecimal", "istitle",
     "str_len", "encode", "decode",
     "zfill", "center", "ljust", "rjust", "expandtabs",
     "equal", "not_equal", "greater", "greater_equal", "less", "less_equal",
     "compare_chararrays",
+    "partition", "rpartition", "translate",
+    "array", "asarray", "chararray",
 ]

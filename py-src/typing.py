@@ -61,4 +61,16 @@ class NDArray:
         return _ndarray
 
 
-__all__ = ["NDArray", "ArrayLike", "DTypeLike"]
+class NBitBase:
+    """Stand-in for numpy's static-typing generic ``NBitBase``.
+
+    Real numpy uses this as a base for parametrized integer/float bit-width
+    aliases (``np.intp`` etc.). rumpy doesn't enforce those constraints at
+    runtime; the class exists so ``from numpy.typing import NBitBase`` works.
+    """
+
+    def __init_subclass__(cls, **kwargs):
+        pass
+
+
+__all__ = ["NDArray", "ArrayLike", "DTypeLike", "NBitBase"]

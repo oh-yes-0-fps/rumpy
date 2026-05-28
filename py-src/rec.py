@@ -164,8 +164,6 @@ class recarray:
         return [list(r) for r in self._rows]
 
 
-# ----------------- public constructors -----------------
-
 def fromarrays(array_list, names):
     """Construct a recarray from a list of equal-length per-column arrays."""
     names = _parse_names(names)
@@ -217,12 +215,156 @@ class format_parser:
         self.titles = list(titles) if titles else []
 
 
-def fromstring(*args, **kwargs):
-    raise NotImplementedError("numpy.rec.fromstring needs typed binary buffers")
+_FORMAT_CODES = {
+    "b1": ("int", 1, False),
+    "i1": ("int", 1, True),
+    "i2": ("int", 2, True),
+    "i4": ("int", 4, True),
+    "i8": ("int", 8, True),
+    "u1": ("int", 1, False),
+    "u2": ("int", 2, False),
+    "u4": ("int", 4, False),
+    "u8": ("int", 8, False),
+    "f4": ("float", 4, True),
+    "f8": ("float", 8, True),
+}
 
 
-def fromfile(*args, **kwargs):
-    raise NotImplementedError("numpy.rec.fromfile needs typed binary buffers")
+def _parse_formats(formats):
+    """Split a numpy-style formats spec into ``[(kind, size, signed), …]``.
+
+    Trailing fixed-width byte-string fields (``S<n>``) come back as
+    ``("bytes", n, False)``. Optional leading endian markers on individual
+    fields (``<i4``, ``>f8``) are stripped.
+    """
+    if isinstance(formats, str):
+        items = [f.strip() for f in formats.split(",")]
+    else:
+        items = [str(f).strip() for f in formats]
+    parsed = []
+    for f in items:
+        if f.startswith(("<", ">", "=", "|")):
+            f = f[1:]
+        if f in _FORMAT_CODES:
+            parsed.append(_FORMAT_CODES[f])
+        elif len(f) > 1 and f[0] in ("S", "a"):
+            try:
+                n = int(f[1:])
+            except ValueError as exc:
+                raise ValueError(f"rec: invalid byte-string format {f!r}") from exc
+            parsed.append(("bytes", n, False))
+        else:
+            raise ValueError(f"rec: unsupported format code {f!r}")
+    return parsed
+
+
+def _decode_float(buf, big_endian):
+    """IEEE-754 decode for 4- or 8-byte buffers."""
+    n = len(buf)
+    bits = int.from_bytes(buf, "big" if big_endian else "little", signed=False)
+    if n == 4:
+        sign = (bits >> 31) & 0x1
+        exp = (bits >> 23) & 0xFF
+        mant = bits & 0x7FFFFF
+        bias = 127
+        mant_bits = 23
+    elif n == 8:
+        sign = (bits >> 63) & 0x1
+        exp = (bits >> 52) & 0x7FF
+        mant = bits & ((1 << 52) - 1)
+        bias = 1023
+        mant_bits = 52
+    else:
+        raise ValueError(f"_decode_float: unsupported width {n}")
+    if exp == (1 << (8 if n == 4 else 11)) - 1:
+        if mant == 0:
+            return float("-inf") if sign else float("inf")
+        return float("nan")
+    if exp == 0:
+        value = mant * (2.0 ** (1 - bias - mant_bits))
+    else:
+        value = (1.0 + mant * (2.0 ** -mant_bits)) * (2.0 ** (exp - bias))
+    return -value if sign else value
+
+
+def _unpack_record(raw, parsed, big_endian):
+    pos = 0
+    values = []
+    for kind, size, signed in parsed:
+        chunk = raw[pos : pos + size]
+        pos += size
+        if kind == "int":
+            values.append(int.from_bytes(
+                chunk,
+                "big" if big_endian else "little",
+                signed=signed,
+            ))
+        elif kind == "float":
+            values.append(_decode_float(chunk, big_endian))
+        else:
+            values.append(bytes(chunk).rstrip(b"\x00"))
+    return tuple(values)
+
+
+def fromstring(datastring, dtype=None, shape=None, offset=0,
+               formats=None, names=None, titles=None, aligned=False,
+               byteorder=None):
+    """Parse a typed binary buffer into a :class:`recarray`.
+
+    Only the ``formats``/``names`` route is supported (rumpy's rec is not
+    backed by a structured ndarray, so a full ``dtype`` argument can't carry
+    field info). Set ``byteorder`` to ``"<"``/``">"``/``"big"``/``"little"``
+    to override the little-endian default.
+    """
+    _ = (dtype, titles, aligned)
+    if formats is None:
+        raise NotImplementedError(
+            "rec.fromstring: only the formats=... route is supported"
+        )
+    if names is None:
+        raise ValueError("rec.fromstring: names is required alongside formats")
+
+    parsed = _parse_formats(formats)
+    name_list = _parse_names(names)
+    if len(name_list) != len(parsed):
+        raise ValueError(
+            f"rec.fromstring: {len(name_list)} names but {len(parsed)} formats"
+        )
+    big_endian = byteorder in (">", "big")
+    record_size = sum(size for _kind, size, _signed in parsed)
+
+    raw = bytes(datastring)[offset:]
+    n_avail = len(raw) // record_size if record_size else 0
+    if shape is None:
+        n = n_avail
+    else:
+        n = shape[0] if isinstance(shape, tuple) else int(shape)
+        if n < 0:
+            n = n_avail
+        if n > n_avail:
+            raise ValueError(
+                f"rec.fromstring: requested {n} records, buffer holds {n_avail}"
+            )
+
+    rows = [
+        _unpack_record(raw[i * record_size : (i + 1) * record_size], parsed, big_endian)
+        for i in range(n)
+    ]
+    return fromrecords(rows, name_list)
+
+
+def fromfile(fd, dtype=None, shape=None, offset=0,
+             formats=None, names=None, titles=None, aligned=False,
+             byteorder=None):
+    """Read records from a file-like / path source. See :func:`fromstring`."""
+    if hasattr(fd, "read"):
+        data = fd.read()
+    else:
+        with open(fd, "rb") as fh:
+            data = fh.read()
+    return fromstring(data, dtype=dtype, shape=shape, offset=offset,
+                      formats=formats, names=names, titles=titles,
+                      aligned=aligned, byteorder=byteorder)
 
 
 __all__ = [

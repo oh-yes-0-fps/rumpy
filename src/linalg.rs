@@ -284,6 +284,30 @@ pub fn transpose(a: &ArraysD) -> ArraysD {
         ArraysD::F64(arr) => ArraysD::F64(arr.t().to_owned()),
         ArraysD::C64(arr) => ArraysD::C64(arr.t().to_owned()),
         ArraysD::C128(arr) => ArraysD::C128(arr.t().to_owned()),
+        // Transpose is a pure data-rearrangement that works for any element
+        // type — handle the non-numeric variants by extending the same
+        // operation to their inner ArrayD.
+        ArraysD::Object(arr) => ArraysD::Object(arr.t().to_owned()),
+        ArraysD::Str { itemsize_chars, data } => ArraysD::Str {
+            itemsize_chars: *itemsize_chars,
+            data: data.t().to_owned(),
+        },
+        ArraysD::Bytes { itemsize, data } => ArraysD::Bytes {
+            itemsize: *itemsize,
+            data: data.t().to_owned(),
+        },
+        ArraysD::Datetime64 { unit, data } => ArraysD::Datetime64 {
+            unit: *unit,
+            data: data.t().to_owned(),
+        },
+        ArraysD::Timedelta64 { unit, data } => ArraysD::Timedelta64 {
+            unit: *unit,
+            data: data.t().to_owned(),
+        },
+        ArraysD::Void { layout, data } => ArraysD::Void {
+            layout: layout.clone(),
+            data: data.t().to_owned(),
+        },
     }
 }
 
@@ -293,6 +317,19 @@ pub fn flatten(a: &ArraysD) -> ArraysD {
         ($var:ident, $ty:ty, $arr:ident) => {{
             let data: Vec<$ty> = $arr.iter().copied().collect();
             ArraysD::$var(ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).unwrap_or_default())
+        }};
+    }
+    // Non-Copy element types (PyObjectRef, String, Vec<u8>) need `.cloned()`
+    // instead. We split the dispatch into the copy-friendly numeric arms and
+    // the non-Copy arms.
+    macro_rules! per_clone {
+        ($var:expr, $arr:ident) => {{
+            let data: Vec<_> = $arr.iter().cloned().collect();
+            let len = data.len();
+            match ArrayD::from_shape_vec(IxDyn(&[len]), data) {
+                Ok(d) => $var(d),
+                Err(_) => return a.clone(),
+            }
         }};
     }
     match a {
@@ -310,6 +347,27 @@ pub fn flatten(a: &ArraysD) -> ArraysD {
         ArraysD::F64(arr) => per!(F64, f64, arr),
         ArraysD::C64(arr) => per!(C64, C32, arr),
         ArraysD::C128(arr) => per!(C128, C64, arr),
+        ArraysD::Object(arr) => per_clone!(ArraysD::Object, arr),
+        ArraysD::Str { itemsize_chars, data } => {
+            let n = *itemsize_chars;
+            per_clone!(|d| ArraysD::Str { itemsize_chars: n, data: d }, data)
+        }
+        ArraysD::Bytes { itemsize, data } => {
+            let n = *itemsize;
+            per_clone!(|d| ArraysD::Bytes { itemsize: n, data: d }, data)
+        }
+        ArraysD::Datetime64 { unit, data } => {
+            let u = *unit;
+            per_clone!(|d| ArraysD::Datetime64 { unit: u, data: d }, data)
+        }
+        ArraysD::Timedelta64 { unit, data } => {
+            let u = *unit;
+            per_clone!(|d| ArraysD::Timedelta64 { unit: u, data: d }, data)
+        }
+        ArraysD::Void { layout, data } => {
+            let l = layout.clone();
+            per_clone!(|d| ArraysD::Void { layout: l.clone(), data: d }, data)
+        }
     }
 }
 
@@ -340,6 +398,19 @@ pub fn reshape(a: &ArraysD, shape: &[usize]) -> Option<ArraysD> {
             }
         }};
     }
+    macro_rules! per_clone {
+        ($wrap:expr, $arr:ident) => {{
+            match $arr.clone().into_shape_with_order(s.clone()) {
+                Ok(new) => Some($wrap(new)),
+                Err(_) => {
+                    let data: Vec<_> = $arr.iter().cloned().collect();
+                    ndarray::ArrayD::from_shape_vec(s.clone(), data)
+                        .ok()
+                        .map($wrap)
+                }
+            }
+        }};
+    }
     match a {
         ArraysD::Bool(arr) => per!(Bool, arr, bool),
         ArraysD::I8(arr) => per!(I8, arr, i8),
@@ -355,6 +426,27 @@ pub fn reshape(a: &ArraysD, shape: &[usize]) -> Option<ArraysD> {
         ArraysD::F64(arr) => per!(F64, arr, f64),
         ArraysD::C64(arr) => per!(C64, arr, C32),
         ArraysD::C128(arr) => per!(C128, arr, C64),
+        ArraysD::Object(arr) => per_clone!(ArraysD::Object, arr),
+        ArraysD::Str { itemsize_chars, data } => {
+            let n = *itemsize_chars;
+            per_clone!(|d| ArraysD::Str { itemsize_chars: n, data: d }, data)
+        }
+        ArraysD::Bytes { itemsize, data } => {
+            let n = *itemsize;
+            per_clone!(|d| ArraysD::Bytes { itemsize: n, data: d }, data)
+        }
+        ArraysD::Datetime64 { unit, data } => {
+            let u = *unit;
+            per_clone!(|d| ArraysD::Datetime64 { unit: u, data: d }, data)
+        }
+        ArraysD::Timedelta64 { unit, data } => {
+            let u = *unit;
+            per_clone!(|d| ArraysD::Timedelta64 { unit: u, data: d }, data)
+        }
+        ArraysD::Void { layout, data } => {
+            let l = layout.clone();
+            per_clone!(|d| ArraysD::Void { layout: l.clone(), data: d }, data)
+        }
     }
 }
 
@@ -401,5 +493,75 @@ pub fn concatenate(arrays: &[ArraysD], axis: usize, vm: &VirtualMachine) -> PyRe
         DType::F64 => cat!(F64,),
         DType::C64 => cat!(C64,),
         DType::C128 => cat!(C128,),
+        // Non-numeric dtypes: gather views from the matching struct-variant
+        // arms. Each path uses cloned views (the underlying ArrayD<T> isn't
+        // Copy here, but ndarray::concatenate works fine with cloned data).
+        DType::Object | DType::Str(_) | DType::Bytes(_)
+        | DType::Datetime64(_) | DType::Timedelta64(_) | DType::Void(_) => {
+            concat_nonnumeric(&cast, axis, promoted_dtype, vm)
+        }
+    }
+}
+
+fn concat_nonnumeric(
+    cast: &[ArraysD],
+    axis: usize,
+    target: DType,
+    vm: &VirtualMachine,
+) -> PyResult<ArraysD> {
+    // Convert each array to typed views of the same element type.
+    match target {
+        DType::Object => {
+            let views: Vec<_> = cast.iter().filter_map(|a| match a {
+                ArraysD::Object(x) => Some(x.view()), _ => None,
+            }).collect();
+            let res = ndarray::concatenate(Axis(axis), &views)
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
+            Ok(ArraysD::Object(res))
+        }
+        DType::Str(n) => {
+            let views: Vec<_> = cast.iter().filter_map(|a| match a {
+                ArraysD::Str { data, .. } => Some(data.view()), _ => None,
+            }).collect();
+            let res = ndarray::concatenate(Axis(axis), &views)
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
+            Ok(ArraysD::Str { itemsize_chars: n, data: res })
+        }
+        DType::Bytes(n) => {
+            let views: Vec<_> = cast.iter().filter_map(|a| match a {
+                ArraysD::Bytes { data, .. } => Some(data.view()), _ => None,
+            }).collect();
+            let res = ndarray::concatenate(Axis(axis), &views)
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
+            Ok(ArraysD::Bytes { itemsize: n, data: res })
+        }
+        DType::Datetime64(u) => {
+            let views: Vec<_> = cast.iter().filter_map(|a| match a {
+                ArraysD::Datetime64 { data, .. } => Some(data.view()), _ => None,
+            }).collect();
+            let res = ndarray::concatenate(Axis(axis), &views)
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
+            Ok(ArraysD::Datetime64 { unit: u, data: res })
+        }
+        DType::Timedelta64(u) => {
+            let views: Vec<_> = cast.iter().filter_map(|a| match a {
+                ArraysD::Timedelta64 { data, .. } => Some(data.view()), _ => None,
+            }).collect();
+            let res = ndarray::concatenate(Axis(axis), &views)
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
+            Ok(ArraysD::Timedelta64 { unit: u, data: res })
+        }
+        DType::Void(_) => {
+            let layout = cast.iter().find_map(|a| match a {
+                ArraysD::Void { layout, .. } => Some(layout.clone()), _ => None,
+            }).ok_or_else(|| crate::internal::internal(vm, "concat: void layout missing"))?;
+            let views: Vec<_> = cast.iter().filter_map(|a| match a {
+                ArraysD::Void { data, .. } => Some(data.view()), _ => None,
+            }).collect();
+            let res = ndarray::concatenate(Axis(axis), &views)
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
+            Ok(ArraysD::Void { layout, data: res })
+        }
+        _ => Err(crate::internal::internal(vm, "concat_nonnumeric: numeric dtype routed here")),
     }
 }

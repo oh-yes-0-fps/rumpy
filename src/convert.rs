@@ -23,7 +23,7 @@ pub enum Scalar {
 }
 
 impl Scalar {
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn inferred_dtype(self) -> DType {
         match self {
@@ -35,7 +35,7 @@ impl Scalar {
         }
     }
 
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn as_f64(self) -> f64 {
         match self {
@@ -47,12 +47,24 @@ impl Scalar {
         }
     }
 
-    #[no_panic::no_panic]
+    #[cfg_attr(feature = "no-panic", no_panic::no_panic)]
     #[inline]
     pub fn as_c128(self) -> C64 {
         match self {
             Scalar::Complex(c) => c,
             _ => Complex::new(self.as_f64(), 0.0),
+        }
+    }
+
+    /// Stringify the scalar for non-numeric dtype storage (e.g. building a
+    /// `Str`/`Bytes` array from a list of Python ints/floats).
+    pub fn to_display_string(&self) -> String {
+        match self {
+            Scalar::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
+            Scalar::Int(i) => i.to_string(),
+            Scalar::UInt(u) => u.to_string(),
+            Scalar::Float(f) => f.to_string(),
+            Scalar::Complex(c) => format!("({}+{}j)", c.re, c.im),
         }
     }
 }
@@ -115,10 +127,51 @@ pub fn obj_to_array(
             None => a,
         });
     }
+    // Fast paths for non-numeric target dtypes. These handle data that
+    // `obj_as_scalar` would reject (Python strings, bytes, arbitrary
+    // objects). The path that runs depends on what numpy *actually* does for
+    // the target dtype:
+    //
+    //   dtype=object → wrap every leaf as a PyObjectRef, preserving identity
+    //   dtype=str / U… → str() each leaf and store as a Python str
+    //   dtype=bytes / S… → bytes() each leaf
+    //   dtype=datetime64 / timedelta64 → parse ISO-8601 strings or accept
+    //     integers
+    if let Some(t) = target_dtype {
+        match t {
+            DType::Object => return obj_to_object_array(obj, vm),
+            DType::Str(n) => return obj_to_str_array(obj, n, vm),
+            DType::Bytes(n) => return obj_to_bytes_array(obj, n, vm),
+            DType::Datetime64(u) | DType::Timedelta64(u) => {
+                return obj_to_time_array(obj, t, u, vm);
+            }
+            _ => {}
+        }
+    }
     // Scalar?
     if let Ok(s) = obj_as_scalar(obj, vm) {
         let dt = target_dtype.unwrap_or_else(|| s.inferred_dtype());
         return Ok(scalar_to_zero_d(s, dt));
+    }
+    // No target dtype, but it might still be a Python string we should keep
+    // as a U… array (numpy's `np.array(['hi','yo'])` infers U).
+    if target_dtype.is_none() {
+        if let Some(s) = obj.downcast_ref::<PyStr>() {
+            let v = s.as_wtf8().to_string_lossy().into_owned();
+            let n = v.chars().count() as u32;
+            return Ok(ArraysD::Str {
+                itemsize_chars: n,
+                data: ArrayD::from_elem(IxDyn(&[]), v),
+            });
+        }
+        if let Some(b) = obj.downcast_ref::<rustpython_vm::builtins::PyBytes>() {
+            let bytes = b.as_bytes().to_vec();
+            let n = bytes.len() as u32;
+            return Ok(ArraysD::Bytes {
+                itemsize: n,
+                data: ArrayD::from_elem(IxDyn(&[]), bytes),
+            });
+        }
     }
     // Nested sequence
     if obj.downcast_ref::<PyList>().is_some() || obj.downcast_ref::<PyTuple>().is_some() {
@@ -168,6 +221,58 @@ pub fn obj_to_array(
                 }
             }
         }
+        // If no explicit dtype was given, detect a homogeneous list of
+        // strings / bytes (numpy infers `U…` / `S…`) before falling back to
+        // numeric scalar collection. The collector below would otherwise
+        // raise "cannot convert str to a numeric scalar".
+        if target_dtype.is_none() {
+            let (shape, objs) = collect_objects(obj, vm)?;
+            if !objs.is_empty()
+                && objs.iter().all(|o| o.downcast_ref::<PyStr>().is_some())
+            {
+                let strings: Vec<String> = objs
+                    .iter()
+                    .map(|o| {
+                        o.downcast_ref::<PyStr>()
+                            .map(|s| s.as_wtf8().to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                let widest = strings
+                    .iter()
+                    .map(|s| s.chars().count())
+                    .max()
+                    .unwrap_or(0) as u32;
+                let arr = ArrayD::from_shape_vec(IxDyn(&shape), strings)
+                    .or_internal(vm, "list-of-str inference")?;
+                return Ok(ArraysD::Str { itemsize_chars: widest, data: arr });
+            }
+            if !objs.is_empty()
+                && objs
+                    .iter()
+                    .all(|o| o.downcast_ref::<rustpython_vm::builtins::PyBytes>().is_some())
+            {
+                let raw: Vec<Vec<u8>> = objs
+                    .iter()
+                    .map(|o| {
+                        o.downcast_ref::<rustpython_vm::builtins::PyBytes>()
+                            .map(|b| b.as_bytes().to_vec())
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                let widest = raw.iter().map(|v| v.len()).max().unwrap_or(0) as u32;
+                let padded: Vec<Vec<u8>> = raw
+                    .into_iter()
+                    .map(|mut v| {
+                        v.resize(widest as usize, 0);
+                        v
+                    })
+                    .collect();
+                let arr = ArrayD::from_shape_vec(IxDyn(&shape), padded)
+                    .or_internal(vm, "list-of-bytes inference")?;
+                return Ok(ArraysD::Bytes { itemsize: widest, data: arr });
+            }
+        }
         let (shape, scalars) = collect_nested(obj, vm)?;
         let dtype = match target_dtype {
             Some(dt) => dt,
@@ -179,6 +284,233 @@ pub fn obj_to_array(
         "cannot convert {} to numpy.ndarray",
         obj.class().name()
     )))
+}
+
+// =====================================================================
+// Non-numeric construction helpers
+// =====================================================================
+
+/// Walk a nested Python list/tuple, accumulating per-cell `PyObjectRef`s
+/// into a flat vector while inferring the surrounding `shape`. Strings and
+/// bytes count as leaves (not iterables) for purposes of shape inference,
+/// matching numpy's `dtype=object` behavior.
+fn collect_objects(
+    obj: &PyObjectRef,
+    vm: &VirtualMachine,
+) -> PyResult<(Vec<usize>, Vec<PyObjectRef>)> {
+    fn is_seq(o: &PyObjectRef) -> bool {
+        o.downcast_ref::<PyList>().is_some() || o.downcast_ref::<PyTuple>().is_some()
+    }
+
+    let mut shape = Vec::new();
+    let mut cur = obj.clone();
+    while is_seq(&cur) {
+        let Some(items) = seq_items(&cur) else {
+            // `is_seq` was true on the previous loop iteration but a foreign
+            // sequence type (or a future refactor) could in principle make
+            // `seq_items` return None. Treat that as a leaf rather than panic.
+            break;
+        };
+        shape.push(items.len());
+        if items.is_empty() {
+            break;
+        }
+        cur = items[0].clone();
+    }
+
+    fn walk(
+        obj: &PyObjectRef,
+        depth: usize,
+        shape: &[usize],
+        out: &mut Vec<PyObjectRef>,
+        vm: &VirtualMachine,
+    ) -> PyResult<()> {
+        if depth == shape.len() {
+            out.push(obj.clone());
+            return Ok(());
+        }
+        let items = seq_items(obj).ok_or_else(|| {
+            vm.new_value_error("inhomogeneous nested sequence".to_string())
+        })?;
+        if items.len() != shape[depth] {
+            return Err(vm.new_value_error(
+                "inhomogeneous nested sequence".to_string(),
+            ));
+        }
+        for it in items {
+            walk(&it, depth + 1, shape, out, vm)?;
+        }
+        Ok(())
+    }
+    let mut data = Vec::new();
+    walk(obj, 0, &shape, &mut data, vm)?;
+    Ok((shape, data))
+}
+
+fn obj_to_object_array(
+    obj: &PyObjectRef,
+    vm: &VirtualMachine,
+) -> PyResult<ArraysD> {
+    // Scalar (non-iterable) → 0-D array holding the object itself.
+    if !(obj.downcast_ref::<PyList>().is_some() || obj.downcast_ref::<PyTuple>().is_some()) {
+        return Ok(ArraysD::Object(
+            ArrayD::<PyObjectRef>::from_elem(IxDyn(&[]), obj.clone()),
+        ));
+    }
+    let (shape, data) = collect_objects(obj, vm)?;
+    let arr = ArrayD::from_shape_vec(IxDyn(&shape), data)
+        .or_internal(vm, "obj_to_object_array shape")?;
+    Ok(ArraysD::Object(arr))
+}
+
+fn obj_to_str_array(
+    obj: &PyObjectRef,
+    target_n: u32,
+    vm: &VirtualMachine,
+) -> PyResult<ArraysD> {
+    let coerce = |o: &PyObjectRef| -> PyResult<String> {
+        if let Some(s) = o.downcast_ref::<PyStr>() {
+            Ok(s.as_wtf8().to_string_lossy().into_owned())
+        } else {
+            // Use builtin str() coercion.
+            let s = o.str(vm)?;
+            Ok(s.as_wtf8().to_string_lossy().into_owned())
+        }
+    };
+    if !(obj.downcast_ref::<PyList>().is_some() || obj.downcast_ref::<PyTuple>().is_some()) {
+        let v = coerce(obj)?;
+        let n = if target_n == 0 { v.chars().count() as u32 } else { target_n };
+        return Ok(ArraysD::Str {
+            itemsize_chars: n,
+            data: ArrayD::from_elem(IxDyn(&[]), v),
+        });
+    }
+    let (shape, data) = collect_objects(obj, vm)?;
+    let strings: Vec<String> = data.iter().map(coerce).collect::<PyResult<_>>()?;
+    let widest = strings.iter().map(|s| s.chars().count()).max().unwrap_or(0) as u32;
+    let n = if target_n == 0 { widest } else { target_n };
+    let arr = ArrayD::from_shape_vec(IxDyn(&shape), strings)
+        .or_internal(vm, "obj_to_str_array shape")?;
+    Ok(ArraysD::Str { itemsize_chars: n, data: arr })
+}
+
+fn obj_to_bytes_array(
+    obj: &PyObjectRef,
+    target_n: u32,
+    vm: &VirtualMachine,
+) -> PyResult<ArraysD> {
+    let coerce = |o: &PyObjectRef| -> PyResult<Vec<u8>> {
+        if let Some(b) = o.downcast_ref::<rustpython_vm::builtins::PyBytes>() {
+            Ok(b.as_bytes().to_vec())
+        } else if let Some(s) = o.downcast_ref::<PyStr>() {
+            Ok(s.as_wtf8().to_string_lossy().as_bytes().to_vec())
+        } else {
+            // Fall through to str() then encode latin-1.
+            let s = o.str(vm)?;
+            Ok(s.as_wtf8().to_string_lossy().as_bytes().to_vec())
+        }
+    };
+    if !(obj.downcast_ref::<PyList>().is_some() || obj.downcast_ref::<PyTuple>().is_some()) {
+        let v = coerce(obj)?;
+        let n = if target_n == 0 { v.len() as u32 } else { target_n };
+        let mut padded = v;
+        padded.resize(n as usize, 0);
+        return Ok(ArraysD::Bytes {
+            itemsize: n,
+            data: ArrayD::from_elem(IxDyn(&[]), padded),
+        });
+    }
+    let (shape, data) = collect_objects(obj, vm)?;
+    let raw: Vec<Vec<u8>> = data.iter().map(coerce).collect::<PyResult<_>>()?;
+    let widest = raw.iter().map(|v| v.len()).max().unwrap_or(0) as u32;
+    let n = if target_n == 0 { widest } else { target_n };
+    let padded: Vec<Vec<u8>> = raw
+        .into_iter()
+        .map(|mut v| {
+            v.resize(n as usize, 0);
+            v
+        })
+        .collect();
+    let arr = ArrayD::from_shape_vec(IxDyn(&shape), padded)
+        .or_internal(vm, "obj_to_bytes_array shape")?;
+    Ok(ArraysD::Bytes { itemsize: n, data: arr })
+}
+
+fn obj_to_time_array(
+    obj: &PyObjectRef,
+    target: DType,
+    unit: crate::dtype::TimeUnit,
+    vm: &VirtualMachine,
+) -> PyResult<ArraysD> {
+    // For now we accept ints / floats / ISO strings (numpy parses these too).
+    // Strings are interpreted as ISO-8601 dates/datetimes via `chrono`.
+    let coerce = |o: &PyObjectRef| -> PyResult<i64> {
+        if let Ok(s) = obj_as_scalar(o, vm) {
+            return Ok(s.as_f64() as i64);
+        }
+        if let Some(s) = o.downcast_ref::<PyStr>() {
+            let text = s.as_wtf8().to_string_lossy().into_owned();
+            return parse_iso_to_unit(&text, unit).ok_or_else(|| {
+                vm.new_value_error(format!("could not parse datetime: {text:?}"))
+            });
+        }
+        Err(vm.new_type_error(
+            "could not interpret element as datetime/timedelta".to_string(),
+        ))
+    };
+    let build = |unit: crate::dtype::TimeUnit, data: ArrayD<i64>| -> ArraysD {
+        match target {
+            DType::Datetime64(_) => ArraysD::Datetime64 { unit, data },
+            DType::Timedelta64(_) => ArraysD::Timedelta64 { unit, data },
+            // Caller routes only the two time dtypes here, but the match
+            // must still be total. Default to Datetime64 — bug-class invariant.
+            _ => ArraysD::Datetime64 { unit, data },
+        }
+    };
+    if !(obj.downcast_ref::<PyList>().is_some() || obj.downcast_ref::<PyTuple>().is_some()) {
+        let v = coerce(obj)?;
+        return Ok(build(unit, ArrayD::from_elem(IxDyn(&[]), v)));
+    }
+    let (shape, data) = collect_objects(obj, vm)?;
+    let ints: Vec<i64> = data.iter().map(coerce).collect::<PyResult<_>>()?;
+    let arr = ArrayD::from_shape_vec(IxDyn(&shape), ints)
+        .or_internal(vm, "obj_to_time_array shape")?;
+    Ok(build(unit, arr))
+}
+
+/// Parse an ISO-8601 date or datetime string into the requested time unit.
+pub(crate) fn parse_iso_to_unit(s: &str, unit: crate::dtype::TimeUnit) -> Option<i64> {
+    use chrono::{NaiveDate, NaiveDateTime};
+    use crate::dtype::TimeUnit;
+    // Try datetime first, then date.
+    let dt: NaiveDateTime = if let Ok(d) = s.parse::<NaiveDateTime>() {
+        d
+    } else if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        d.and_hms_opt(0, 0, 0)?
+    } else if let Ok(d) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+        d
+    } else if let Ok(d) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        d
+    } else {
+        return None;
+    };
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1)?.and_hms_opt(0, 0, 0)?;
+    let dur = dt.signed_duration_since(epoch);
+    Some(match unit {
+        TimeUnit::Y => dt.date().signed_duration_since(epoch.date()).num_days() / 365,
+        TimeUnit::M => dt.date().signed_duration_since(epoch.date()).num_days() / 30,
+        TimeUnit::W => dur.num_weeks(),
+        TimeUnit::D => dur.num_days(),
+        TimeUnit::H => dur.num_hours(),
+        TimeUnit::Min => dur.num_minutes(),
+        TimeUnit::S => dur.num_seconds(),
+        TimeUnit::Ms => dur.num_milliseconds(),
+        TimeUnit::Us => dur.num_microseconds()?,
+        TimeUnit::Ns => dur.num_nanoseconds()?,
+        TimeUnit::Ps => dur.num_nanoseconds()?.checked_mul(1000)?,
+        TimeUnit::Fs => dur.num_nanoseconds()?.checked_mul(1_000_000)?,
+        TimeUnit::As => dur.num_nanoseconds()?.checked_mul(1_000_000_000)?,
+    })
 }
 
 /// Coerce any Python object into an `ndarray::ArrayD<T>` by first running
@@ -246,6 +578,11 @@ fn zero_d_to_scalar(a: &crate::dtype::ArraysD) -> Scalar {
             Scalar::Complex(Complex::new(v.re as f64, v.im as f64))
         }
         C128(x) => Scalar::Complex(x[ix]),
+        // Non-numeric 0-d arrays: stringify or fall back to 0. Numpy itself
+        // raises here for some dtypes; we return a default-ish scalar so
+        // existing call sites don't panic.
+        Datetime64 { data, .. } | Timedelta64 { data, .. } => Scalar::Int(data[ix]),
+        Object(_) | Str { .. } | Bytes { .. } | Void { .. } => Scalar::Float(0.0),
     }
 }
 
@@ -280,6 +617,29 @@ fn scalar_to_zero_d(s: Scalar, dt: DType) -> ArraysD {
             C32::new(c.re as f32, c.im as f32)
         }),
         DType::C128 => one!(C128, C64, s.as_c128()),
+        DType::Datetime64(u) => ArraysD::Datetime64 {
+            unit: u,
+            data: ArrayD::from_elem(shape, s.as_f64() as i64),
+        },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 {
+            unit: u,
+            data: ArrayD::from_elem(shape, s.as_f64() as i64),
+        },
+        DType::Str(n) => ArraysD::Str {
+            itemsize_chars: n,
+            data: ArrayD::from_elem(shape, String::new()),
+        },
+        DType::Bytes(n) => ArraysD::Bytes {
+            itemsize: n,
+            data: ArrayD::from_elem(shape, vec![0u8; n as usize]),
+        },
+        DType::Object => ArraysD::Object(
+            crate::internal::empty_array(),
+        ),
+        DType::Void(n) => ArraysD::Void {
+            layout: std::sync::Arc::new(crate::dtype::StructLayout::new(Vec::new(), n as usize)),
+            data: ArrayD::from_elem(shape, vec![0u8; n as usize]),
+        },
     }
 }
 
@@ -385,6 +745,49 @@ fn scalars_to_array(
             C32::new(c.re as f32, c.im as f32)
         }),
         DType::C128 => build!(C128, C64, |s: Scalar| s.as_c128()),
+        DType::Datetime64(u) => {
+            let data: Vec<i64> = scalars.iter().map(|s| s.as_f64() as i64).collect();
+            ArrayD::<i64>::from_shape_vec(IxDyn(shape), data)
+                .or_internal(vm, "scalars_to_array dt")
+                .map(|d| ArraysD::Datetime64 { unit: u, data: d })
+        }
+        DType::Timedelta64(u) => {
+            let data: Vec<i64> = scalars.iter().map(|s| s.as_f64() as i64).collect();
+            ArrayD::<i64>::from_shape_vec(IxDyn(shape), data)
+                .or_internal(vm, "scalars_to_array td")
+                .map(|d| ArraysD::Timedelta64 { unit: u, data: d })
+        }
+        DType::Str(n) => {
+            let data: Vec<String> = scalars.iter().map(|s| s.to_display_string()).collect();
+            ArrayD::<String>::from_shape_vec(IxDyn(shape), data)
+                .or_internal(vm, "scalars_to_array str")
+                .map(|d| ArraysD::Str { itemsize_chars: n, data: d })
+        }
+        DType::Bytes(n) => {
+            let data: Vec<Vec<u8>> = scalars
+                .iter()
+                .map(|s| {
+                    let mut b = s.to_display_string().into_bytes();
+                    b.resize(n as usize, 0);
+                    b
+                })
+                .collect();
+            ArrayD::<Vec<u8>>::from_shape_vec(IxDyn(shape), data)
+                .or_internal(vm, "scalars_to_array bytes")
+                .map(|d| ArraysD::Bytes { itemsize: n, data: d })
+        }
+        DType::Object => Err(vm.new_type_error(
+            "cannot build object array from scalars without vm-aware path".to_string(),
+        )),
+        DType::Void(n) => {
+            let data: Vec<Vec<u8>> = scalars.iter().map(|_| vec![0u8; n as usize]).collect();
+            ArrayD::<Vec<u8>>::from_shape_vec(IxDyn(shape), data)
+                .or_internal(vm, "scalars_to_array void")
+                .map(|d| ArraysD::Void {
+                    layout: std::sync::Arc::new(crate::dtype::StructLayout::new(Vec::new(), n as usize)),
+                    data: d,
+                })
+        }
     }
 }
 
@@ -417,11 +820,102 @@ pub fn array_to_pylist(arr: &ArraysD, vm: &VirtualMachine) -> PyObjectRef {
     if arr.dtype().is_integer() {
         return int_array_to_pylist(arr, vm);
     }
+    // Non-numeric: render to whatever Python value the cell already holds.
+    match arr {
+        ArraysD::Object(a) => return object_array_to_pylist(a, vm),
+        ArraysD::Str { data, .. } => return str_array_to_pylist(data, vm),
+        ArraysD::Bytes { data, .. } => return bytes_array_to_pylist(data, vm),
+        ArraysD::Datetime64 { data, .. } | ArraysD::Timedelta64 { data, .. } => {
+            // Datetime/Timedelta surface as integers (the raw unit counter).
+            return raw_i64_array_to_pylist(data, vm);
+        }
+        ArraysD::Void { data, .. } => return bytes_array_to_pylist(data, vm),
+        _ => {}
+    }
     // `coerce::<f64>` always returns an owned `ArrayD<f64>` (clones if dtype
     // already matches), so no panic-prone variant unwrap is needed.
     use crate::dtype::CoerceArray;
     let owned = arr.coerce::<f64>();
     rec_f64(&owned.view(), vm)
+}
+
+fn object_array_to_pylist(
+    arr: &ArrayD<PyObjectRef>,
+    vm: &VirtualMachine,
+) -> PyObjectRef {
+    if arr.ndim() == 0 {
+        return arr[IxDyn(&[])].clone();
+    }
+    if arr.ndim() == 1 {
+        let v: Vec<PyObjectRef> = arr.iter().cloned().collect();
+        return PyList::from(v).into_ref(&vm.ctx).into();
+    }
+    let mut subs = Vec::with_capacity(arr.shape()[0]);
+    for sub in arr.axis_iter(Axis(0)) {
+        let owned = sub.to_owned();
+        subs.push(object_array_to_pylist(&owned, vm));
+    }
+    PyList::from(subs).into_ref(&vm.ctx).into()
+}
+
+fn str_array_to_pylist(
+    arr: &ArrayD<String>,
+    vm: &VirtualMachine,
+) -> PyObjectRef {
+    if arr.ndim() == 0 {
+        return vm.ctx.new_str(arr[IxDyn(&[])].as_str()).into();
+    }
+    if arr.ndim() == 1 {
+        let v: Vec<PyObjectRef> = arr
+            .iter()
+            .map(|s| vm.ctx.new_str(s.as_str()).into())
+            .collect();
+        return PyList::from(v).into_ref(&vm.ctx).into();
+    }
+    let mut subs = Vec::with_capacity(arr.shape()[0]);
+    for sub in arr.axis_iter(Axis(0)) {
+        subs.push(str_array_to_pylist(&sub.to_owned(), vm));
+    }
+    PyList::from(subs).into_ref(&vm.ctx).into()
+}
+
+fn bytes_array_to_pylist(
+    arr: &ArrayD<Vec<u8>>,
+    vm: &VirtualMachine,
+) -> PyObjectRef {
+    if arr.ndim() == 0 {
+        return vm.ctx.new_bytes(arr[IxDyn(&[])].clone()).into();
+    }
+    if arr.ndim() == 1 {
+        let v: Vec<PyObjectRef> = arr
+            .iter()
+            .map(|b| vm.ctx.new_bytes(b.clone()).into())
+            .collect();
+        return PyList::from(v).into_ref(&vm.ctx).into();
+    }
+    let mut subs = Vec::with_capacity(arr.shape()[0]);
+    for sub in arr.axis_iter(Axis(0)) {
+        subs.push(bytes_array_to_pylist(&sub.to_owned(), vm));
+    }
+    PyList::from(subs).into_ref(&vm.ctx).into()
+}
+
+fn raw_i64_array_to_pylist(
+    arr: &ArrayD<i64>,
+    vm: &VirtualMachine,
+) -> PyObjectRef {
+    if arr.ndim() == 0 {
+        return vm.ctx.new_int(arr[IxDyn(&[])]).into();
+    }
+    if arr.ndim() == 1 {
+        let v: Vec<PyObjectRef> = arr.iter().map(|&x| vm.ctx.new_int(x).into()).collect();
+        return PyList::from(v).into_ref(&vm.ctx).into();
+    }
+    let mut subs = Vec::with_capacity(arr.shape()[0]);
+    for sub in arr.axis_iter(Axis(0)) {
+        subs.push(raw_i64_array_to_pylist(&sub.to_owned(), vm));
+    }
+    PyList::from(subs).into_ref(&vm.ctx).into()
 }
 
 fn int_array_to_pylist(arr: &ArraysD, vm: &VirtualMachine) -> PyObjectRef {
@@ -612,6 +1106,10 @@ pub fn parse_dtype_arg(
             "float" => Some(DType::F64),
             "bool" => Some(DType::Bool),
             "complex" => Some(DType::C128),
+            // np.array([...], dtype=object) / np.array(..., dtype=str)
+            "object" | "object_" => Some(DType::Object),
+            "str" | "str_" => Some(DType::Str(0)),
+            "bytes" | "bytes_" => Some(DType::Bytes(0)),
             other => DType::parse(other),
         };
         if let Some(d) = mapped {

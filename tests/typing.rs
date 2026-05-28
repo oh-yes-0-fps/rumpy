@@ -102,12 +102,11 @@ fn typing_all_export() {
         r#"
 import numpy
 exported = set(numpy.typing.__all__)
-assert exported == {"NDArray", "ArrayLike", "DTypeLike"}, exported
+assert exported == {"NDArray", "ArrayLike", "DTypeLike", "NBitBase"}, exported
 "#,
     );
 }
 
-// ---- numpy.exceptions ----------------------------------------------------
 
 #[test]
 fn exceptions_axis_error_subclasses_value_and_index_error() {
@@ -145,7 +144,6 @@ assert issubclass(DTypePromotionError, TypeError)
     );
 }
 
-// ---- numpy.version -------------------------------------------------------
 
 #[test]
 fn version_has_strings_and_release_flag() {
@@ -164,7 +162,6 @@ assert v.version == v.full_version == v.short_version
     );
 }
 
-// ---- numpy.compat / doc / core / ctypeslib (legacy / stub modules) -------
 
 #[test]
 fn compat_exposes_legacy_aliases() {
@@ -218,7 +215,6 @@ for fn in (as_array, ndpointer, load_library):
     );
 }
 
-// ---- numpy.char ----------------------------------------------------------
 
 #[test]
 fn char_basic_string_ops() {
@@ -251,25 +247,38 @@ assert c.greater_equal(["b"], ["b"]) == [True]
     );
 }
 
-// ---- numpy.rec — only fromstring/fromfile remain unimplemented ----------
 
 #[test]
-fn rec_remaining_stubs_raise() {
+fn rec_fromstring_parses_typed_buffer() {
     run(
         r#"
 import numpy.rec as r
-for name in ("fromstring", "fromfile"):
-    try:
-        getattr(r, name)()
-    except NotImplementedError:
-        pass
-    else:
-        raise AssertionError(f"{name} should raise")
+
+def le_int(v, n):
+    return (v & ((1 << (8 * n)) - 1)).to_bytes(n, "little")
+
+packed = (
+    le_int(1, 4) + bytes.fromhex("000000000000F83F") + b"abc"
+    + le_int(2, 4) + bytes.fromhex("0000000000000240") + b"de\x00"
+)
+arr = r.fromstring(packed, formats="i4,f8,S3", names="id,weight,tag")
+assert len(arr) == 2
+assert arr[0].id == 1
+assert abs(arr[0].weight - 1.5) < 1e-12
+assert arr[0].tag == b"abc"
+assert arr[1].id == 2
+assert abs(arr[1].weight - 2.25) < 1e-12
+assert arr[1].tag == b"de"
+
+be_packed = (1).to_bytes(4, "big") + bytes.fromhex("3FF8000000000000") + b"xyz"
+arr2 = r.fromstring(be_packed, formats="i4,f8,S3",
+                    names="id,weight,tag", byteorder=">")
+assert arr2[0].id == 1
+assert abs(arr2[0].weight - 1.5) < 1e-12
 "#,
     );
 }
 
-// ---- numpy.dtypes --------------------------------------------------------
 
 #[test]
 fn dtypes_classes_carry_names() {
@@ -297,7 +306,27 @@ assert hash(Int32DType()) == hash(Int32DType())
     );
 }
 
-// ---- numpy.testing -------------------------------------------------------
+
+#[test]
+fn ma_count_along_axis() {
+    run(
+        r#"
+import numpy
+ma = numpy.ma
+
+m = ma.masked_array(
+    [[1, 2, 3], [4, 5, 6]],
+    mask=[[False, True, False], [True, False, False]],
+)
+assert m.count() == 4
+got0 = m.count(axis=0)
+assert got0.tolist() == [1, 1, 2]
+got1 = m.count(axis=1)
+assert got1.tolist() == [2, 2]
+"#,
+    );
+}
+
 
 #[test]
 fn testing_assert_equal_and_array_equal() {
@@ -351,7 +380,6 @@ else:
     );
 }
 
-// ---- numpy.emath ---------------------------------------------------------
 
 #[test]
 fn emath_sqrt_promotes_negative_reals() {
@@ -410,7 +438,6 @@ assert isinstance(r, complex)
     );
 }
 
-// ---- numpy.polynomial ----------------------------------------------------
 
 #[test]
 fn polynomial_eval_and_arith() {
@@ -482,7 +509,6 @@ assert abs(p.coef[2] - 3.0) < 1e-6
     );
 }
 
-// ---- numpy.strings -------------------------------------------------------
 
 #[test]
 fn strings_basic_ops() {
@@ -498,7 +524,6 @@ assert s.str_len(["", "abc"]) == [0, 3]
     );
 }
 
-// ---- numpy.rec (real implementation) -------------------------------------
 
 #[test]
 fn rec_construct_and_field_access() {

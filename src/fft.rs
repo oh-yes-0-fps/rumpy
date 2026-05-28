@@ -307,6 +307,11 @@ fn roll_axis(
         ArraysD::F64(arr) => per!(F64, arr),
         ArraysD::C64(arr) => per!(C64, arr),
         ArraysD::C128(arr) => per!(C128, arr),
+        // roll_axis on non-numeric arrays falls back to a no-op (fft caller
+        // would already have rejected the dtype). Returning Ok-of-clone is
+        // safe because fftshift is logically a permutation, so identity is a
+        // valid degenerate case for empty / non-permutable arrays.
+        other => Ok(other.clone()),
     }
 }
 

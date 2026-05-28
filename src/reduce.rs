@@ -159,6 +159,7 @@ fn transpose_axes(a: &ArraysD, perm: &[usize]) -> ArraysD {
         ArraysD::F64(arr) => per!(F64, arr, f64),
         ArraysD::C64(arr) => per!(C64, arr, crate::dtype::C32),
         ArraysD::C128(arr) => per!(C128, arr, crate::dtype::C64),
+        _ => { a.clone() },
     }
 }
 
@@ -234,6 +235,7 @@ pub fn reduce(
         ArraysD::U8(a) => ArraysD::U8(reduce_int_axis(a, axis.map(|v| v as usize), op)),
         ArraysD::U16(a) => ArraysD::U16(reduce_int_axis(a, axis.map(|v| v as usize), op)),
         ArraysD::U32(a) => ArraysD::U32(reduce_int_axis(a, axis.map(|v| v as usize), op)),
+        _ => { return Err(crate::internal::unsupported_dtype(vm, "reduce", a.dtype())) },
     })
 }
 
@@ -337,12 +339,29 @@ where
             Reduce::Min => v
                 .iter()
                 .copied()
-                .reduce(|a, b| if a < b { a } else { b })
+                .reduce(|a, b| {
+                    // numpy: any NaN in input -> NaN result (NaN propagates).
+                    if a.is_nan_() || b.is_nan_() {
+                        T::nan_()
+                    } else if a < b {
+                        a
+                    } else {
+                        b
+                    }
+                })
                 .unwrap_or_else(T::nan_),
             Reduce::Max => v
                 .iter()
                 .copied()
-                .reduce(|a, b| if a > b { a } else { b })
+                .reduce(|a, b| {
+                    if a.is_nan_() || b.is_nan_() {
+                        T::nan_()
+                    } else if a > b {
+                        a
+                    } else {
+                        b
+                    }
+                })
                 .unwrap_or_else(T::nan_),
             Reduce::Var(ddof) => {
                 let n = v.len();
@@ -458,6 +477,7 @@ where
 trait FloatMath {
     fn sqrt_(self) -> Self;
     fn nan_() -> Self;
+    fn is_nan_(self) -> bool;
 }
 impl FloatMath for f32 {
     fn sqrt_(self) -> Self {
@@ -465,6 +485,9 @@ impl FloatMath for f32 {
     }
     fn nan_() -> Self {
         f32::NAN
+    }
+    fn is_nan_(self) -> bool {
+        self.is_nan()
     }
 }
 impl FloatMath for f64 {
@@ -474,6 +497,9 @@ impl FloatMath for f64 {
     fn nan_() -> Self {
         f64::NAN
     }
+    fn is_nan_(self) -> bool {
+        self.is_nan()
+    }
 }
 impl FloatMath for f16 {
     fn sqrt_(self) -> Self {
@@ -481,6 +507,9 @@ impl FloatMath for f16 {
     }
     fn nan_() -> Self {
         f16::NAN
+    }
+    fn is_nan_(self) -> bool {
+        self.is_nan()
     }
 }
 
@@ -556,6 +585,7 @@ pub fn arg_extremum(a: &ArraysD, want_max: bool, vm: &VirtualMachine) -> PyResul
         ArraysD::C64(_) | ArraysD::C128(_) => {
             return Err(internal(vm, "arg_extremum reached complex arm"));
         }
+        _ => { None },
     };
     result.or_internal(vm, "arg_extremum: empty after non-empty check")
 }
