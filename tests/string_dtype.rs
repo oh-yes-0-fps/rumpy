@@ -35,8 +35,7 @@ fn run(source: &str) {
 
 #[test]
 fn str_dtype_width_inference_picks_widest() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Widest input drives the dtype width.
@@ -48,14 +47,12 @@ assert arr.shape == (3,)
 # Explicit width truncates / pads.
 fixed = np.array(["short", "way longer than the cap"], dtype="U5")
 assert fixed.dtype.itemsize == 4 * 5
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_indexing_returns_python_str() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 arr = np.array(["alpha", "beta", "gamma"])
@@ -69,14 +66,12 @@ assert arr[-1] == "gamma"
 sl = arr[1:]
 assert sl.dtype.kind == "U"
 assert sl.tolist() == ["beta", "gamma"]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_iteration_yields_python_strings() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 arr = np.array(["one", "two", "three"])
@@ -94,14 +89,12 @@ assert len(rows) == 2
 assert rows[0].dtype.kind == "U"
 assert rows[0].tolist() == ["a", "b"]
 assert rows[1].tolist() == ["c", "d"]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_tolist_round_trip() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 original = ["one", "two", "three"]
@@ -112,14 +105,12 @@ assert arr.tolist() == original
 rebuilt = np.asarray(arr.tolist())
 assert rebuilt.tolist() == original
 assert rebuilt.dtype.kind == "U"
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_from_non_string_coerces_via_str() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Numeric input forced to U dtype: each entry goes through str().
@@ -128,14 +119,12 @@ assert arr.dtype.kind == "U"
 # tolist returns Python strs.
 got = arr.tolist()
 assert got == ["1", "22", "333"]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn bytes_dtype_pads_with_nul_to_fixed_width() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Implicit width = max length of any element.
@@ -148,14 +137,12 @@ padded = np.array([b"hi", b"yo"], dtype="S4")
 assert padded.dtype.itemsize == 4
 got = padded.tolist()
 assert got == [b"hi", b"yo"] or got == [b"hi\x00\x00", b"yo\x00\x00"]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn bytes_dtype_iteration_yields_bytes() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 arr = np.array([b"a", b"bb", b"ccc"])
@@ -164,14 +151,12 @@ assert all(isinstance(v, bytes) for v in collected)
 # Strip trailing NULs since the array is padded to width 3.
 stripped = [v.rstrip(b"\x00") for v in collected]
 assert stripped == [b"a", b"bb", b"ccc"]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_unicode_codepoints_count_not_bytes() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # "héllo" has 5 codepoints (é counts as one), not 6 UTF-8 bytes.
@@ -183,14 +168,12 @@ assert arr.dtype.itemsize == 4 * 5
 mixed = np.array(["x", "héllo", "ab"])
 assert mixed.dtype.itemsize == 4 * 5
 assert mixed.tolist() == ["x", "héllo", "ab"]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_empty_array_has_zero_width() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 empty = np.array([], dtype="U3")
@@ -204,14 +187,12 @@ zeros = np.array(["", "", ""])
 assert zeros.dtype.kind == "U"
 assert zeros.dtype.itemsize == 0
 assert zeros.tolist() == ["", "", ""]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_repr_reports_generic_name() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # rumpy reports `dtype('str')` / `dtype('bytes')` without the width
@@ -225,14 +206,12 @@ b = np.array([b"hi", b"yo"])
 assert repr(b.dtype) == "dtype('bytes')"
 assert b.dtype.kind == "S"
 assert b.dtype.itemsize == 2
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_reshape_preserves_dtype() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 arr = np.array(["a", "b", "c", "d", "e", "f"])
@@ -244,14 +223,12 @@ assert m.tolist() == [["a", "b", "c"], ["d", "e", "f"]]
 # Transpose round-trip on a string matrix.
 t = m.T.T
 assert t.tolist() == m.tolist()
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_concatenate_widens_to_max() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 a = np.array(["ab", "cd"])
@@ -261,14 +238,12 @@ both = np.concatenate([a, b])
 assert both.dtype.kind == "U"
 assert both.dtype.itemsize == 4 * 4
 assert both.tolist() == ["ab", "cd", "efgh", "ij"]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_dtype_with_explicit_dtype_object_round_trips() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Build with np.dtype("U7") and verify the resulting array carries it.
@@ -277,14 +252,12 @@ arr = np.array(["abc", "defghij"], dtype=dt)
 assert arr.dtype.kind == "U"
 assert arr.dtype.itemsize == 4 * 7
 assert arr.tolist() == ["abc", "defghij"]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn bytes_dtype_explicit_width_one_truncates_or_caps() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Explicit S1 caps the storage at 1 byte. Pin whatever the current
@@ -295,14 +268,12 @@ assert arr.dtype.kind == "S"
 assert arr.dtype.itemsize == 1
 got = arr.tolist()
 assert isinstance(got[0], bytes) and len(got[0]) <= 5
-"#,
-    );
+"#);
 }
 
 #[test]
 fn str_array_shape_attributes_match_numeric() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 arr = np.array([["aa", "bb"], ["cc", "dd"], ["ee", "ff"]])
@@ -314,6 +285,5 @@ row0 = arr[0]
 assert row0.ndim == 1
 assert row0.shape == (2,)
 assert row0.tolist() == ["aa", "bb"]
-"#,
-    );
+"#);
 }

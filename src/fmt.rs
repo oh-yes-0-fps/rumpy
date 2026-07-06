@@ -26,12 +26,12 @@ fn format_body(a: &ArraysD) -> String {
         ArraysD::F16(arr) => format_nested(arr, &|v: &half::f16| format!("{v}")),
         ArraysD::F32(arr) => format_nested(arr, &|v: &f32| format!("{v}")),
         ArraysD::F64(arr) => format_nested(arr, &|v: &f64| format!("{v}")),
-        ArraysD::C64(arr) => {
-            format_nested(arr, &|v: &num_complex::Complex<f32>| format!("({}+{}j)", v.re, v.im))
-        }
-        ArraysD::C128(arr) => {
-            format_nested(arr, &|v: &num_complex::Complex<f64>| format!("({}+{}j)", v.re, v.im))
-        }
+        ArraysD::C64(arr) => format_nested(arr, &|v: &num_complex::Complex<f32>| {
+            format!("({}+{}j)", v.re, v.im)
+        }),
+        ArraysD::C128(arr) => format_nested(arr, &|v: &num_complex::Complex<f64>| {
+            format!("({}+{}j)", v.re, v.im)
+        }),
         // Non-numeric variants render through their natural Debug/string
         // form. We use a generic-but-non-Copy helper since these element
         // types (PyObjectRef, String, Vec<u8>, i64) aren't all Copy.

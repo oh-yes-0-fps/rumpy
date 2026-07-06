@@ -42,6 +42,7 @@ def sliding_window_view(x, window_shape, axis=None):
     # Allocate output array (zeros) and fill it by iterating over the
     # window positions.
     import numpy as np
+
     out = np.zeros(tuple(out_shape), dtype=x.dtype)
 
     # Helper: enumerate all valid window-position tuples along the windowed
@@ -87,6 +88,7 @@ def as_strided(x, shape=None, strides=None, subok=False, writeable=True):
     value raises a clear error so callers don't get silently wrong results.
     """
     import numpy as np
+
     if strides is not None:
         raise NotImplementedError(
             "as_strided with explicit strides is not supported (no true views)"
@@ -102,6 +104,7 @@ def as_strided(x, shape=None, strides=None, subok=False, writeable=True):
 def broadcast_shapes(*shapes):
     """``np.broadcast_shapes(*shapes)``."""
     import numpy as np
+
     if not shapes:
         return ()
     result = []

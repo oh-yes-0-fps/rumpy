@@ -10,6 +10,7 @@ unicode = str
 long = int
 basestring = (str, bytes)
 
+
 # Removed in numpy 2.x but historically lived here. rumpy's minimal
 # rustpython build doesn't ship every codec, so we default to UTF-8 and
 # fall back to a per-byte conversion when no codec is available.

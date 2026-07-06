@@ -22,11 +22,7 @@ pub enum IdxItem {
     NewAxis,
 }
 
-pub fn parse_index(
-    obj: &PyObjectRef,
-    ndim: usize,
-    vm: &VirtualMachine,
-) -> PyResult<Vec<IdxItem>> {
+pub fn parse_index(obj: &PyObjectRef, ndim: usize, vm: &VirtualMachine) -> PyResult<Vec<IdxItem>> {
     let items: Vec<PyObjectRef> = if let Some(t) = obj.downcast_ref::<PyTuple>() {
         t.as_slice().to_vec()
     } else {
@@ -45,9 +41,9 @@ pub fn parse_index(
         }
     }
     if ellipsis_count > 1 {
-        return Err(vm.new_index_error(
-            "an index can only have a single ellipsis ('...')".to_string(),
-        ));
+        return Err(
+            vm.new_index_error("an index can only have a single ellipsis ('...')".to_string())
+        );
     }
     if axis_consuming > ndim {
         return Err(vm.new_index_error("too many indices for array".to_string()));
@@ -99,10 +95,7 @@ pub fn parse_index(
                 }
             }
             if all_bool {
-                let mask: Vec<bool> = vec
-                    .iter()
-                    .map(|v| v.is(&vm.ctx.true_value))
-                    .collect();
+                let mask: Vec<bool> = vec.iter().map(|v| v.is(&vm.ctx.true_value)).collect();
                 out.push(IdxItem::BoolMask(mask));
             } else {
                 for v in vec.iter() {
@@ -137,9 +130,7 @@ pub fn normalize_idx(i: isize, dim: usize, vm: &VirtualMachine) -> PyResult<usiz
     let dim_i = dim as isize;
     let real = if i < 0 { i + dim_i } else { i };
     if real < 0 || real >= dim_i {
-        return Err(vm.new_index_error(format!(
-            "index {i} out of bounds for axis of size {dim}"
-        )));
+        return Err(vm.new_index_error(format!("index {i} out of bounds for axis of size {dim}")));
     }
     Ok(real as usize)
 }
@@ -154,10 +145,22 @@ fn normalize_slice(
     let step = st.unwrap_or(1);
     if step >= 0 {
         (
-            s.map(|v| if v < 0 { (v + dim_i).max(0) } else { v.min(dim_i) })
-                .unwrap_or(0),
-            e.map(|v| if v < 0 { (v + dim_i).max(0) } else { v.min(dim_i) })
-                .unwrap_or(dim_i),
+            s.map(|v| {
+                if v < 0 {
+                    (v + dim_i).max(0)
+                } else {
+                    v.min(dim_i)
+                }
+            })
+            .unwrap_or(0),
+            e.map(|v| {
+                if v < 0 {
+                    (v + dim_i).max(0)
+                } else {
+                    v.min(dim_i)
+                }
+            })
+            .unwrap_or(dim_i),
             step,
         )
     } else {
@@ -225,11 +228,7 @@ fn expand_ellipsis(parsed: &[IdxItem], ndim: usize) -> Vec<IdxItem> {
 
 /// Apply an index path to an array — returns either a 0-D array (scalar
 /// access) or a sub-array (slice access).
-pub fn apply_index(
-    a: &ArraysD,
-    parsed: &[IdxItem],
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn apply_index(a: &ArraysD, parsed: &[IdxItem], vm: &VirtualMachine) -> PyResult<ArraysD> {
     // ---- Advanced indexing: a single ndarray index ----
     if parsed.len() == 1 {
         match &parsed[0] {
@@ -247,8 +246,7 @@ pub fn apply_index(
         .iter()
         .filter(|it| !matches!(it, IdxItem::NewAxis))
         .collect();
-    let all_int = axis_items.len() == nd
-        && axis_items.iter().all(|k| matches!(k, IdxItem::Int(_)));
+    let all_int = axis_items.len() == nd && axis_items.iter().all(|k| matches!(k, IdxItem::Int(_)));
     if all_int && !has_newaxis {
         let mut norm = Vec::with_capacity(axis_items.len());
         for (k, &dim) in axis_items.iter().zip(a.shape()) {
@@ -278,8 +276,7 @@ pub fn apply_index(
             }
             IdxItem::IntArray(_) | IdxItem::BoolMask(_) => {
                 return Err(vm.new_index_error(
-                    "advanced indexing only supported as the sole index element"
-                        .to_string(),
+                    "advanced indexing only supported as the sole index element".to_string(),
                 ));
             }
             // `NewAxis`/`Ellipsis` items are filtered out before this loop —
@@ -321,11 +318,7 @@ pub fn apply_index(
 
 /// `a[mask]` — boolean indexing. Mask shape must match `a.shape` (numpy
 /// flattens both and selects where True).
-fn bool_mask_select(
-    a: &ArraysD,
-    mask: &[bool],
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+fn bool_mask_select(a: &ArraysD, mask: &[bool], vm: &VirtualMachine) -> PyResult<ArraysD> {
     if mask.len() != a.len() {
         return Err(vm.new_index_error(format!(
             "boolean mask length {} != array length {}",
@@ -377,13 +370,22 @@ fn bool_mask_select(
         ArraysD::C64(arr) => per!(C64, crate::dtype::C32, arr),
         ArraysD::C128(arr) => per!(C128, crate::dtype::C64, arr),
         ArraysD::Object(arr) => per_clone!(arr, ArraysD::Object),
-        ArraysD::Str { itemsize_chars, data } => {
+        ArraysD::Str {
+            itemsize_chars,
+            data,
+        } => {
             let n = itemsize_chars;
-            per_clone!(data, |d| ArraysD::Str { itemsize_chars: n, data: d })
+            per_clone!(data, |d| ArraysD::Str {
+                itemsize_chars: n,
+                data: d
+            })
         }
         ArraysD::Bytes { itemsize, data } => {
             let n = itemsize;
-            per_clone!(data, |d| ArraysD::Bytes { itemsize: n, data: d })
+            per_clone!(data, |d| ArraysD::Bytes {
+                itemsize: n,
+                data: d
+            })
         }
         ArraysD::Datetime64 { unit, data } => {
             per_clone!(data, |d| ArraysD::Datetime64 { unit, data: d })
@@ -392,17 +394,16 @@ fn bool_mask_select(
             per_clone!(data, |d| ArraysD::Timedelta64 { unit, data: d })
         }
         ArraysD::Void { layout, data } => {
-            per_clone!(data, |d| ArraysD::Void { layout: layout.clone(), data: d })
+            per_clone!(data, |d| ArraysD::Void {
+                layout: layout.clone(),
+                data: d
+            })
         }
     }
 }
 
 /// `a[[i, j, k, …]]` — fancy indexing along axis 0.
-fn int_array_select(
-    a: &ArraysD,
-    indices: &[isize],
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+fn int_array_select(a: &ArraysD, indices: &[isize], vm: &VirtualMachine) -> PyResult<ArraysD> {
     // Empty index → return an empty array with shape (0, ...rest of a.shape).
     if indices.is_empty() {
         let mut shape: Vec<usize> = a.shape().to_vec();
@@ -420,19 +421,14 @@ fn int_array_select(
         .collect::<PyResult<_>>()?;
 
     // Stack the per-index sub-arrays along a new leading axis.
-    let parts: Vec<ArraysD> = normalized
-        .iter()
-        .map(|&i| index_axis(a, 0, i))
-        .collect();
+    let parts: Vec<ArraysD> = normalized.iter().map(|&i| index_axis(a, 0, i)).collect();
     crate::extras::stack(&parts, 0, vm)
 }
 
 /// Produce an empty array with the given shape, same dtype as `a`.
 fn empty_like_shape(a: &ArraysD, shape: &[usize]) -> ArraysD {
     macro_rules! per {
-        ($var:ident, $ty:ty) => {{
-            ArraysD::$var(ArrayD::<$ty>::default(IxDyn(shape)))
-        }};
+        ($var:ident, $ty:ty) => {{ ArraysD::$var(ArrayD::<$ty>::default(IxDyn(shape))) }};
     }
     match a {
         ArraysD::Bool(_) => per!(Bool, bool),
@@ -449,16 +445,14 @@ fn empty_like_shape(a: &ArraysD, shape: &[usize]) -> ArraysD {
         ArraysD::F64(_) => per!(F64, f64),
         ArraysD::C64(_) => per!(C64, crate::dtype::C32),
         ArraysD::C128(_) => per!(C128, crate::dtype::C64),
-        _ => { a.clone() },
+        _ => a.clone(),
     }
 }
 
 fn scalar_at(a: &ArraysD, idx: IxDyn) -> ArraysD {
     use crate::dtype::ArraysD::*;
     macro_rules! one {
-        ($variant:ident, $arr:ident) => {{
-            $variant(ArrayD::from_elem(IxDyn(&[]), $arr[idx.clone()]))
-        }};
+        ($variant:ident, $arr:ident) => {{ $variant(ArrayD::from_elem(IxDyn(&[]), $arr[idx.clone()])) }};
     }
     match a {
         Bool(arr) => one!(Bool, arr),
@@ -476,7 +470,10 @@ fn scalar_at(a: &ArraysD, idx: IxDyn) -> ArraysD {
         C64(arr) => one!(C64, arr),
         C128(arr) => one!(C128, arr),
         Object(arr) => Object(ArrayD::from_elem(IxDyn(&[]), arr[idx].clone())),
-        Str { itemsize_chars, data } => Str {
+        Str {
+            itemsize_chars,
+            data,
+        } => Str {
             itemsize_chars: *itemsize_chars,
             data: ArrayD::from_elem(IxDyn(&[]), data[idx].clone()),
         },
@@ -501,9 +498,7 @@ fn scalar_at(a: &ArraysD, idx: IxDyn) -> ArraysD {
 
 fn index_axis(a: &ArraysD, axis: usize, n: usize) -> ArraysD {
     macro_rules! per {
-        ($var:ident, $arr:ident) => {{
-            ArraysD::$var($arr.clone().index_axis_move(Axis(axis), n))
-        }};
+        ($var:ident, $arr:ident) => {{ ArraysD::$var($arr.clone().index_axis_move(Axis(axis), n)) }};
     }
     match a {
         ArraysD::Bool(arr) => per!(Bool, arr),
@@ -521,7 +516,10 @@ fn index_axis(a: &ArraysD, axis: usize, n: usize) -> ArraysD {
         ArraysD::C64(arr) => per!(C64, arr),
         ArraysD::C128(arr) => per!(C128, arr),
         ArraysD::Object(arr) => ArraysD::Object(arr.clone().index_axis_move(Axis(axis), n)),
-        ArraysD::Str { itemsize_chars, data } => ArraysD::Str {
+        ArraysD::Str {
+            itemsize_chars,
+            data,
+        } => ArraysD::Str {
             itemsize_chars: *itemsize_chars,
             data: data.clone().index_axis_move(Axis(axis), n),
         },
@@ -620,7 +618,10 @@ fn sub_shape_after_index(
             // Ellipsis and NewAxis are pre-expanded / dropped by set_via_index
             // before this is called, so reaching them here is a logic bug.
             IdxItem::Ellipsis | IdxItem::NewAxis => {
-                return Err(internal(vm, "sub_shape_after_index: unexpected Ellipsis/NewAxis"));
+                return Err(internal(
+                    vm,
+                    "sub_shape_after_index: unexpected Ellipsis/NewAxis",
+                ));
             }
         }
     }
@@ -644,11 +645,7 @@ fn slice_count(start: isize, end: isize, step: isize) -> usize {
     }
 }
 
-fn broadcast_to_shape(
-    v: &ArraysD,
-    shape: &[usize],
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+fn broadcast_to_shape(v: &ArraysD, shape: &[usize], vm: &VirtualMachine) -> PyResult<ArraysD> {
     crate::extras::broadcast_to(v, shape, vm)
 }
 
@@ -712,7 +709,9 @@ fn set_subview(
     macro_rules! per {
         ($arr:ident, $val:ident) => {{
             let mut view = $arr.slice_mut(si.as_ref());
-            ndarray::Zip::from(&mut view).and($val).for_each(|o, &x| *o = x);
+            ndarray::Zip::from(&mut view)
+                .and($val)
+                .for_each(|o, &x| *o = x);
         }};
     }
     match (a, &v) {
@@ -886,13 +885,16 @@ fn set_each(
             arr,
             |f: f64| crate::dtype::C32::new(f as f32, 0.0)
         ),
-        ArraysD::C128(arr) => per!(
-            C128,
-            crate::dtype::C64,
-            arr,
-            |f: f64| crate::dtype::C64::new(f, 0.0)
-        ),
-        _ => { return Err(crate::internal::unsupported_dtype(vm, "set_each", a.dtype())) },
+        ArraysD::C128(arr) => per!(C128, crate::dtype::C64, arr, |f: f64| {
+            crate::dtype::C64::new(f, 0.0)
+        }),
+        _ => {
+            return Err(crate::internal::unsupported_dtype(
+                vm,
+                "set_each",
+                a.dtype(),
+            ));
+        }
     }
     Ok(())
 }
@@ -967,7 +969,11 @@ fn set_row_scalar_dispatch(
         RowMut::C64(v) => v.fill(crate::dtype::C32::new(f as f32, 0.0)),
         RowMut::C128(v) => v.fill(crate::dtype::C64::new(f, 0.0)),
         RowMut::Unsupported(dt) => {
-            return Err(crate::internal::unsupported_dtype(vm, "set_row_scalar", *dt));
+            return Err(crate::internal::unsupported_dtype(
+                vm,
+                "set_row_scalar",
+                *dt,
+            ));
         }
     }
     Ok(())
@@ -1009,11 +1015,9 @@ fn set_nonnumeric_scalar_at(
     let coerced = value.cast(a.dtype());
     macro_rules! per {
         ($dst:ident, $src:ident) => {{
-            let v = $src
-                .iter()
-                .next()
-                .cloned()
-                .ok_or_else(|| crate::internal::internal(vm, "set_nonnumeric_scalar_at: empty src"))?;
+            let v = $src.iter().next().cloned().ok_or_else(|| {
+                crate::internal::internal(vm, "set_nonnumeric_scalar_at: empty src")
+            })?;
             $dst[ix] = v;
         }};
     }
@@ -1021,20 +1025,25 @@ fn set_nonnumeric_scalar_at(
         (ArraysD::Str { data: dst, .. }, ArraysD::Str { data: src, .. }) => per!(dst, src),
         (ArraysD::Bytes { data: dst, .. }, ArraysD::Bytes { data: src, .. }) => per!(dst, src),
         (ArraysD::Object(dst), ArraysD::Object(src)) => per!(dst, src),
-        (ArraysD::Datetime64 { data: dst, .. }, ArraysD::Datetime64 { data: src, .. }) => per!(dst, src),
-        (ArraysD::Timedelta64 { data: dst, .. }, ArraysD::Timedelta64 { data: src, .. }) => per!(dst, src),
+        (ArraysD::Datetime64 { data: dst, .. }, ArraysD::Datetime64 { data: src, .. }) => {
+            per!(dst, src)
+        }
+        (ArraysD::Timedelta64 { data: dst, .. }, ArraysD::Timedelta64 { data: src, .. }) => {
+            per!(dst, src)
+        }
         (ArraysD::Void { data: dst, .. }, ArraysD::Void { data: src, .. }) => per!(dst, src),
-        (dst, _) => return Err(crate::internal::unsupported_dtype(vm, "set_nonnumeric_scalar_at", dst.dtype())),
+        (dst, _) => {
+            return Err(crate::internal::unsupported_dtype(
+                vm,
+                "set_nonnumeric_scalar_at",
+                dst.dtype(),
+            ));
+        }
     }
     Ok(())
 }
 
-fn set_scalar_at(
-    a: &mut ArraysD,
-    ix: IxDyn,
-    scalar: f64,
-    vm: &VirtualMachine,
-) -> PyResult<()> {
+fn set_scalar_at(a: &mut ArraysD, ix: IxDyn, scalar: f64, vm: &VirtualMachine) -> PyResult<()> {
     match a {
         ArraysD::Bool(arr) => arr[ix] = scalar != 0.0,
         ArraysD::I8(arr) => arr[ix] = scalar as i8,
@@ -1050,7 +1059,13 @@ fn set_scalar_at(
         ArraysD::F64(arr) => arr[ix] = scalar,
         ArraysD::C64(arr) => arr[ix] = crate::dtype::C32::new(scalar as f32, 0.0),
         ArraysD::C128(arr) => arr[ix] = crate::dtype::C64::new(scalar, 0.0),
-        _ => { return Err(crate::internal::unsupported_dtype(vm, "set_scalar_at", a.dtype())) },
+        _ => {
+            return Err(crate::internal::unsupported_dtype(
+                vm,
+                "set_scalar_at",
+                a.dtype(),
+            ));
+        }
     }
     Ok(())
 }
@@ -1065,7 +1080,11 @@ fn slice_axis(
 ) -> PyResult<ArraysD> {
     let nd = a.ndim();
     let mut info: Vec<SliceInfoElem> = vec![
-        SliceInfoElem::Slice { start: 0, end: None, step: 1 };
+        SliceInfoElem::Slice {
+            start: 0,
+            end: None,
+            step: 1
+        };
         nd
     ];
     // Python's negative-step semantics differ from ndarray's. In Python,
@@ -1104,7 +1123,10 @@ fn slice_axis(
         ArraysD::C64(arr) => per!(C64, arr),
         ArraysD::C128(arr) => per!(C128, arr),
         ArraysD::Object(arr) => ArraysD::Object(arr.slice(si.as_ref()).to_owned()),
-        ArraysD::Str { itemsize_chars, data } => ArraysD::Str {
+        ArraysD::Str {
+            itemsize_chars,
+            data,
+        } => ArraysD::Str {
             itemsize_chars: *itemsize_chars,
             data: data.slice(si.as_ref()).to_owned(),
         },

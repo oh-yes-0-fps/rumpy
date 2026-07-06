@@ -125,7 +125,9 @@ class MaskedArray:
         return self._data.dtype
 
     def __repr__(self):
-        return f"masked_array(data={self._data.tolist()!r}, mask={self._mask.tolist()!r})"
+        return (
+            f"masked_array(data={self._data.tolist()!r}, mask={self._mask.tolist()!r})"
+        )
 
     def __str__(self):
         return self.__repr__()
@@ -167,19 +169,38 @@ class MaskedArray:
             out_mask = self._mask
         return MaskedArray(out_data, out_mask)
 
-    def __add__(self, other): return self._op(other, lambda a, b: a + b)
-    def __radd__(self, other): return self._op(other, lambda a, b: b + a)
-    def __sub__(self, other): return self._op(other, lambda a, b: a - b)
-    def __rsub__(self, other): return self._op(other, lambda a, b: b - a)
-    def __mul__(self, other): return self._op(other, lambda a, b: a * b)
-    def __rmul__(self, other): return self._op(other, lambda a, b: b * a)
-    def __truediv__(self, other): return self._op(other, lambda a, b: a / b)
-    def __rtruediv__(self, other): return self._op(other, lambda a, b: b / a)
-    def __neg__(self): return MaskedArray(-self._data, self._mask)
+    def __add__(self, other):
+        return self._op(other, lambda a, b: a + b)
+
+    def __radd__(self, other):
+        return self._op(other, lambda a, b: b + a)
+
+    def __sub__(self, other):
+        return self._op(other, lambda a, b: a - b)
+
+    def __rsub__(self, other):
+        return self._op(other, lambda a, b: b - a)
+
+    def __mul__(self, other):
+        return self._op(other, lambda a, b: a * b)
+
+    def __rmul__(self, other):
+        return self._op(other, lambda a, b: b * a)
+
+    def __truediv__(self, other):
+        return self._op(other, lambda a, b: a / b)
+
+    def __rtruediv__(self, other):
+        return self._op(other, lambda a, b: b / a)
+
+    def __neg__(self):
+        return MaskedArray(-self._data, self._mask)
+
     def __eq__(self, other):
         if isinstance(other, MaskedArray):
             return self._op(other, lambda a, b: a == b)
         return MaskedArray(self._data == other, self._mask)
+
     def __ne__(self, other):
         if isinstance(other, MaskedArray):
             return self._op(other, lambda a, b: a != b)
@@ -188,8 +209,10 @@ class MaskedArray:
     # ----- methods -----
     def filled(self, fill_value=None):
         """Return the underlying ndarray with masked cells replaced by ``fill_value``."""
-        fv = fill_value if fill_value is not None else (
-            self.fill_value if self.fill_value is not None else 0
+        fv = (
+            fill_value
+            if fill_value is not None
+            else (self.fill_value if self.fill_value is not None else 0)
         )
         return _np.where(self._mask, fv, self._data)
 
@@ -430,7 +453,11 @@ def empty(shape, dtype="float64"):
 def mean(a, axis=None, dtype=None):
     if isinstance(a, MaskedArray):
         return a.mean(axis=axis, dtype=dtype)
-    return _np.mean(_to_ndarray(a), axis=axis, dtype=dtype) if axis is not None else _np.mean(_to_ndarray(a))
+    return (
+        _np.mean(_to_ndarray(a), axis=axis, dtype=dtype)
+        if axis is not None
+        else _np.mean(_to_ndarray(a))
+    )
 
 
 def sum(a, axis=None, dtype=None):
@@ -470,6 +497,7 @@ def _wrap_unary(np_fn):
         if fn is None:
             return a
         return MaskedArray(fn(getdata(a), *args, **kwargs), mask=getmask(a))
+
     return wrapper
 
 
@@ -481,6 +509,7 @@ def _wrap_binary(np_fn):
         data = fn(getdata(a), getdata(b), *args, **kwargs)
         mask = _combine_masks(getmaskarray(a), getmaskarray(b))
         return MaskedArray(data, mask=mask)
+
     return wrapper
 
 
@@ -492,6 +521,7 @@ def _wrap_reduce(np_fn):
         if isinstance(a, MaskedArray):
             return fn(a.compressed(), *args, **kwargs)
         return fn(_np.asarray(a), *args, **kwargs)
+
     return wrapper
 
 
@@ -501,6 +531,7 @@ def _wrap_passthrough(np_fn):
         if fn is None:
             return args[0] if args else None
         return fn(*args, **kwargs)
+
     return wrapper
 
 
@@ -722,7 +753,10 @@ allequal = _wrap_passthrough(lambda a, b: True)
 
 
 # Mask predicates and helpers.
-def isMA(x): return isinstance(x, MaskedArray)
+def isMA(x):
+    return isinstance(x, MaskedArray)
+
+
 isMaskedArray = isMA
 isarray = isMA
 
@@ -740,7 +774,9 @@ def fix_invalid(a, mask=nomask, copy=True, fill_value=None):
     _ = (copy, fill_value)
     arr = _to_ndarray(a)
     invalid = _np.isnan(arr) | _np.isinf(arr)
-    combined = _combine_masks(invalid, _broadcast_mask(mask, arr.shape) if mask is not nomask else nomask)
+    combined = _combine_masks(
+        invalid, _broadcast_mask(mask, arr.shape) if mask is not nomask else nomask
+    )
     return MaskedArray(arr, mask=combined)
 
 
@@ -797,7 +833,9 @@ def masked_all(shape, dtype="float64"):
 def masked_all_like(arr):
     if isinstance(arr, MaskedArray):
         arr = arr._data
-    return masked_all(arr.shape, dtype=str(arr.dtype) if hasattr(arr, "dtype") else "float64")
+    return masked_all(
+        arr.shape, dtype=str(arr.dtype) if hasattr(arr, "dtype") else "float64"
+    )
 
 
 masked_singleton = masked
@@ -823,12 +861,12 @@ mr_ = _MR_Class()
 
 def maximum_fill_value(obj):
     name = str(getattr(_to_ndarray(obj), "dtype", "float64"))
-    return 1e308 if "float" in name else 2 ** 31 - 1
+    return 1e308 if "float" in name else 2**31 - 1
 
 
 def minimum_fill_value(obj):
     name = str(getattr(_to_ndarray(obj), "dtype", "float64"))
-    return -1e308 if "float" in name else -(2 ** 31)
+    return -1e308 if "float" in name else -(2**31)
 
 
 def ndim(a):
@@ -935,7 +973,12 @@ def compress(a, condition, axis=None):
 
 
 def compress_nd(a, axis=None):
-    return compress(a, _np.ones(a.shape, dtype="bool") if isinstance(a, MaskedArray) else _np.ones(_np.asarray(a).shape, dtype="bool"))
+    return compress(
+        a,
+        _np.ones(a.shape, dtype="bool")
+        if isinstance(a, MaskedArray)
+        else _np.ones(_np.asarray(a).shape, dtype="bool"),
+    )
 
 
 compress_cols = compress_nd
@@ -1043,6 +1086,7 @@ extras = _SelfNamespace()
 # for structured arrays with masked fields.
 class mvoid:
     """Placeholder for masked-record scalar."""
+
     def __init__(self, value=None, mask=False):
         self.value = value
         self.mask = mask

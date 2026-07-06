@@ -7,7 +7,6 @@ time (see rumpy's ``build_py_submodule``); the assignments below are
 fallbacks for static analysis only.
 """
 
-
 # These names are overwritten by the host before the module is exposed.
 version = "0.0.0"
 full_version = version

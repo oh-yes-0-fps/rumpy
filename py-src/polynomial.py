@@ -154,8 +154,8 @@ def polyfit(x, y, deg, rcond=None, full=False):
     n = deg + 1
     # Vandermonde-style normal equations: V^T V c = V^T y.
     # Build symmetric matrix sums[k] = sum(x_i ** k).
-    sums = [sum(xv ** k for xv in xs) for k in range(2 * n - 1)]
-    rhs = [sum(yv * xv ** k for xv, yv in zip(xs, ys)) for k in range(n)]
+    sums = [sum(xv**k for xv in xs) for k in range(2 * n - 1)]
+    rhs = [sum(yv * xv**k for xv, yv in zip(xs, ys)) for k in range(n)]
     mat = [[sums[i + j] for j in range(n)] for i in range(n)]
     return _gauss_solve(mat, rhs)
 
@@ -337,7 +337,11 @@ def _clenshaw(coefs, x, family):
     a_1, b_1, c_2 = family["recur"](1)
     # Result = coefs[0] * basis_0 + b1 * basis_1(x) - b2 * basis_2_via_recur
     # Reduced form using the family's "one_val" representation of basis_1(x).
-    return coefs[0] * family["one_val"](x) + b1 * family["basis1_val"](x) - b2 * c_2 * family["one_val"](x)
+    return (
+        coefs[0] * family["one_val"](x)
+        + b1 * family["basis1_val"](x)
+        - b2 * c_2 * family["one_val"](x)
+    )
 
 
 # ---- Family descriptors ----
@@ -441,26 +445,69 @@ def _family_int(family, coef, m=1, k=0):
 
 # ---- Per-family module-level functions ----
 
-def chebval(x, c): return _family_val(_CHEB, c, x)
-def hermval(x, c): return _family_val(_HERMITE, c, x)
-def hermeval(x, c): return _family_val(_HERMITE_E, c, x)
-def lagval(x, c): return _family_val(_LAGUERRE, c, x)
-def legval(x, c): return _family_val(_LEGENDRE, c, x)
 
-def chebroots(c): return _family_roots(_CHEB, c)
-def hermroots(c): return _family_roots(_HERMITE, c)
-def hermeroots(c): return _family_roots(_HERMITE_E, c)
-def lagroots(c): return _family_roots(_LAGUERRE, c)
-def legroots(c): return _family_roots(_LEGENDRE, c)
+def chebval(x, c):
+    return _family_val(_CHEB, c, x)
 
-def chebfit(x, y, deg): return _family_fit(_CHEB, x, y, deg)
-def hermfit(x, y, deg): return _family_fit(_HERMITE, x, y, deg)
-def hermefit(x, y, deg): return _family_fit(_HERMITE_E, x, y, deg)
-def lagfit(x, y, deg): return _family_fit(_LAGUERRE, x, y, deg)
-def legfit(x, y, deg): return _family_fit(_LEGENDRE, x, y, deg)
+
+def hermval(x, c):
+    return _family_val(_HERMITE, c, x)
+
+
+def hermeval(x, c):
+    return _family_val(_HERMITE_E, c, x)
+
+
+def lagval(x, c):
+    return _family_val(_LAGUERRE, c, x)
+
+
+def legval(x, c):
+    return _family_val(_LEGENDRE, c, x)
+
+
+def chebroots(c):
+    return _family_roots(_CHEB, c)
+
+
+def hermroots(c):
+    return _family_roots(_HERMITE, c)
+
+
+def hermeroots(c):
+    return _family_roots(_HERMITE_E, c)
+
+
+def lagroots(c):
+    return _family_roots(_LAGUERRE, c)
+
+
+def legroots(c):
+    return _family_roots(_LEGENDRE, c)
+
+
+def chebfit(x, y, deg):
+    return _family_fit(_CHEB, x, y, deg)
+
+
+def hermfit(x, y, deg):
+    return _family_fit(_HERMITE, x, y, deg)
+
+
+def hermefit(x, y, deg):
+    return _family_fit(_HERMITE_E, x, y, deg)
+
+
+def lagfit(x, y, deg):
+    return _family_fit(_LAGUERRE, x, y, deg)
+
+
+def legfit(x, y, deg):
+    return _family_fit(_LEGENDRE, x, y, deg)
 
 
 # ---- Class hierarchy ----
+
 
 class _SeriesBase:
     """Shared logic for orthogonal-polynomial classes."""
@@ -472,7 +519,9 @@ class _SeriesBase:
         if not self.coef:
             self.coef = [0]
         self.domain = list(domain) if domain is not None else self._default_domain()
-        self.window = list(window) if window is not None else list(self._default_domain())
+        self.window = (
+            list(window) if window is not None else list(self._default_domain())
+        )
 
     def _default_domain(self):
         return [-1, 1]
@@ -482,14 +531,18 @@ class _SeriesBase:
 
     def __add__(self, other):
         if isinstance(other, _SeriesBase):
-            return type(self)(_family_add(self.coef, other.coef), self.domain, self.window)
+            return type(self)(
+                _family_add(self.coef, other.coef), self.domain, self.window
+            )
         return type(self)(_family_add(self.coef, [other]), self.domain, self.window)
 
     __radd__ = __add__
 
     def __sub__(self, other):
         if isinstance(other, _SeriesBase):
-            return type(self)(_family_sub(self.coef, other.coef), self.domain, self.window)
+            return type(self)(
+                _family_sub(self.coef, other.coef), self.domain, self.window
+            )
         return type(self)(_family_sub(self.coef, [other]), self.domain, self.window)
 
     def __rsub__(self, other):
@@ -546,27 +599,34 @@ class _SeriesBase:
 
 class Chebyshev(_SeriesBase):
     """Chebyshev series in T_k basis."""
+
     _family = _CHEB
 
 
 class Hermite(_SeriesBase):
     """Physicist's Hermite series in H_k basis."""
+
     _family = _HERMITE
 
 
 class HermiteE(_SeriesBase):
     """Probabilist's Hermite series in He_k basis."""
+
     _family = _HERMITE_E
 
 
 class Laguerre(_SeriesBase):
     """Laguerre series in L_k basis."""
+
     _family = _LAGUERRE
-    def _default_domain(self): return [0, 1]
+
+    def _default_domain(self):
+        return [0, 1]
 
 
 class Legendre(_SeriesBase):
     """Legendre series in P_k basis."""
+
     _family = _LEGENDRE
 
 
@@ -576,8 +636,10 @@ class Legendre(_SeriesBase):
 # value/fit/roots functions. We mirror that by attaching them to small
 # namespace objects.
 
+
 class _Namespace:
     """Minimal namespace for `numpy.polynomial.<family>` submodules."""
+
     def __init__(self, **kw):
         for k, v in kw.items():
             setattr(self, k, v)

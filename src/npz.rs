@@ -170,12 +170,8 @@ pub fn read_from(data: &[u8]) -> Result<Vec<(String, ArraysD)>, NpzError> {
         let name_len = u16::from_le_bytes([data[p + 28], data[p + 29]]) as usize;
         let extra_len = u16::from_le_bytes([data[p + 30], data[p + 31]]) as usize;
         let comment_len = u16::from_le_bytes([data[p + 32], data[p + 33]]) as usize;
-        let local_offset = u32::from_le_bytes([
-            data[p + 42],
-            data[p + 43],
-            data[p + 44],
-            data[p + 45],
-        ]) as usize;
+        let local_offset =
+            u32::from_le_bytes([data[p + 42], data[p + 43], data[p + 44], data[p + 45]]) as usize;
         let name = std::str::from_utf8(&data[p + 46..p + 46 + name_len])
             .map_err(|_| NpzError::Format("non-utf8 name".to_string()))?
             .to_owned();
@@ -185,7 +181,8 @@ pub fn read_from(data: &[u8]) -> Result<Vec<(String, ArraysD)>, NpzError> {
         if data[local_offset..local_offset + 4] != LFH_SIG.to_le_bytes() {
             return Err(NpzError::Format("bad local file header".to_string()));
         }
-        let l_name_len = u16::from_le_bytes([data[local_offset + 26], data[local_offset + 27]]) as usize;
+        let l_name_len =
+            u16::from_le_bytes([data[local_offset + 26], data[local_offset + 27]]) as usize;
         let l_extra_len =
             u16::from_le_bytes([data[local_offset + 28], data[local_offset + 29]]) as usize;
         let data_start = local_offset + 30 + l_name_len + l_extra_len;

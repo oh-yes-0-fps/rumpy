@@ -56,23 +56,26 @@ pub fn lin_inner(start: f64, stop: f64, num: usize, endpoint: bool) -> Vec<f64> 
     if num == 1 {
         return vec![start];
     }
-    let denom = if endpoint { (num - 1) as f64 } else { num as f64 };
+    let denom = if endpoint {
+        (num - 1) as f64
+    } else {
+        num as f64
+    };
     let step = (stop - start) / denom;
     (0..num).map(|i| start + step * i as f64).collect()
 }
 
 /// `numpy.linspace(..., endpoint=True, retstep=False)`.
-pub fn linspace_full(
-    start: f64,
-    stop: f64,
-    num: usize,
-    endpoint: bool,
-) -> (ArraysD, f64) {
+pub fn linspace_full(start: f64, stop: f64, num: usize, endpoint: bool) -> (ArraysD, f64) {
     let v = lin_inner(start, stop, num, endpoint);
     let step = if num < 2 {
         f64::NAN
     } else {
-        let denom = if endpoint { (num - 1) as f64 } else { num as f64 };
+        let denom = if endpoint {
+            (num - 1) as f64
+        } else {
+            num as f64
+        };
         (stop - start) / denom
     };
     (
@@ -98,14 +101,20 @@ pub fn arctan2(y: &ArraysD, x: &ArraysD, vm: &VirtualMachine) -> PyResult<Arrays
             let yv = y.broadcast(s.clone()).or_internal(vm, "arctan2: bcast y")?;
             let xv = x.broadcast(s.clone()).or_internal(vm, "arctan2: bcast x")?;
             let mut out = ArrayD::<f32>::zeros(s.clone());
-            ndarray::Zip::from(&mut out).and(&yv).and(&xv).for_each(|o, &p, &q| *o = p.atan2(q));
+            ndarray::Zip::from(&mut out)
+                .and(&yv)
+                .and(&xv)
+                .for_each(|o, &p, &q| *o = p.atan2(q));
             ArraysD::F32(out)
         }
         (ArraysD::F64(y), ArraysD::F64(x)) => {
             let yv = y.broadcast(s.clone()).or_internal(vm, "arctan2: bcast y")?;
             let xv = x.broadcast(s.clone()).or_internal(vm, "arctan2: bcast x")?;
             let mut out = ArrayD::<f64>::zeros(s.clone());
-            ndarray::Zip::from(&mut out).and(&yv).and(&xv).for_each(|o, &p, &q| *o = p.atan2(q));
+            ndarray::Zip::from(&mut out)
+                .and(&yv)
+                .and(&xv)
+                .for_each(|o, &p, &q| *o = p.atan2(q));
             ArraysD::F64(out)
         }
         _ => return Err(vm.new_type_error("arctan2 needs real numeric inputs".to_string())),
@@ -125,14 +134,20 @@ pub fn hypot(x: &ArraysD, y: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD>
             let xv = x.broadcast(s.clone()).or_internal(vm, "hypot: bcast x")?;
             let yv = y.broadcast(s.clone()).or_internal(vm, "hypot: bcast y")?;
             let mut out = ArrayD::<f32>::zeros(s.clone());
-            ndarray::Zip::from(&mut out).and(&xv).and(&yv).for_each(|o, &p, &q| *o = p.hypot(q));
+            ndarray::Zip::from(&mut out)
+                .and(&xv)
+                .and(&yv)
+                .for_each(|o, &p, &q| *o = p.hypot(q));
             ArraysD::F32(out)
         }
         (ArraysD::F64(x), ArraysD::F64(y)) => {
             let xv = x.broadcast(s.clone()).or_internal(vm, "hypot: bcast x")?;
             let yv = y.broadcast(s.clone()).or_internal(vm, "hypot: bcast y")?;
             let mut out = ArrayD::<f64>::zeros(s.clone());
-            ndarray::Zip::from(&mut out).and(&xv).and(&yv).for_each(|o, &p, &q| *o = p.hypot(q));
+            ndarray::Zip::from(&mut out)
+                .and(&xv)
+                .and(&yv)
+                .for_each(|o, &p, &q| *o = p.hypot(q));
             ArraysD::F64(out)
         }
         _ => return Err(vm.new_type_error("hypot needs real numeric inputs".to_string())),
@@ -140,11 +155,19 @@ pub fn hypot(x: &ArraysD, y: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD>
 }
 
 pub fn deg2rad(a: &ArraysD) -> ArraysD {
-    crate::ops::unary_real_or_complex(a, |x| x.to_radians(), |c| c * (std::f64::consts::PI / 180.0))
+    crate::ops::unary_real_or_complex(
+        a,
+        |x| x.to_radians(),
+        |c| c * (std::f64::consts::PI / 180.0),
+    )
 }
 
 pub fn rad2deg(a: &ArraysD) -> ArraysD {
-    crate::ops::unary_real_or_complex(a, |x| x.to_degrees(), |c| c * (180.0 / std::f64::consts::PI))
+    crate::ops::unary_real_or_complex(
+        a,
+        |x| x.to_degrees(),
+        |c| c * (180.0 / std::f64::consts::PI),
+    )
 }
 
 /// `numpy.unwrap` — adjust phase so jumps > discont (default π) get unwrapped.
@@ -178,11 +201,7 @@ pub fn unwrap(a: &ArraysD, discont: f64) -> ArraysD {
 
 /// `numpy.average` — weighted mean. If `weights` is None, falls back to
 /// arithmetic mean.
-pub fn average(
-    a: &ArraysD,
-    weights: Option<&ArraysD>,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn average(a: &ArraysD, weights: Option<&ArraysD>, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let af = cast_f64_or_empty(a);
     let result = match weights {
         None => {
@@ -229,7 +248,12 @@ pub fn percentile(a: &ArraysD, q: f64, vm: &VirtualMachine) -> PyResult<ArraysD>
 pub fn percentile_scalar(a: &ArraysD, q: f64, vm: &VirtualMachine) -> PyResult<f64> {
     let res = percentile(a, q, vm)?;
     use crate::dtype::CoerceArray;
-    Ok(res.coerce::<f64>().iter().next().copied().unwrap_or(f64::NAN))
+    Ok(res
+        .coerce::<f64>()
+        .iter()
+        .next()
+        .copied()
+        .unwrap_or(f64::NAN))
 }
 
 pub fn quantile(a: &ArraysD, q: f64, vm: &VirtualMachine) -> PyResult<ArraysD> {
@@ -297,7 +321,11 @@ pub fn corrcoef(m: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     for i in 0..n {
         for j in 0..n {
             let denom = (mat[(i, i)] * mat[(j, j)]).sqrt();
-            out[(i, j)] = if denom == 0.0 { 0.0 } else { mat[(i, j)] / denom };
+            out[(i, j)] = if denom == 0.0 {
+                0.0
+            } else {
+                mat[(i, j)] / denom
+            };
         }
     }
     Ok(ArraysD::F64(out.into_dyn()))
@@ -329,8 +357,16 @@ fn broadcast(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
     let nd = a.len().max(b.len());
     let mut out = vec![1usize; nd];
     for i in 0..nd {
-        let da = if i + a.len() >= nd { a[i + a.len() - nd] } else { 1 };
-        let db = if i + b.len() >= nd { b[i + b.len() - nd] } else { 1 };
+        let da = if i + a.len() >= nd {
+            a[i + a.len() - nd]
+        } else {
+            1
+        };
+        let db = if i + b.len() >= nd {
+            b[i + b.len() - nd]
+        } else {
+            1
+        };
         out[i] = match (da, db) {
             (x, y) if x == y => x,
             (1, y) => y,

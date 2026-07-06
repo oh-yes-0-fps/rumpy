@@ -222,8 +222,9 @@ class memmap:
     flush — semantically equivalent for small workloads.
     """
 
-    def __init__(self, filename, dtype="float64", mode="r+", offset=0,
-                 shape=None, order="C"):
+    def __init__(
+        self, filename, dtype="float64", mode="r+", offset=0, shape=None, order="C"
+    ):
         _ = order
         self.filename = filename
         self.dtype = dtype
@@ -252,10 +253,20 @@ class memmap:
             return
         # Write back as raw bytes.
         import struct
+
         flat = list(self._arr.ravel().tolist())
-        fmt = {"float64": "d", "float32": "f", "int64": "q", "int32": "i",
-               "int16": "h", "int8": "b", "uint64": "Q", "uint32": "I",
-               "uint16": "H", "uint8": "B"}.get(str(self.dtype), "d")
+        fmt = {
+            "float64": "d",
+            "float32": "f",
+            "int64": "q",
+            "int32": "i",
+            "int16": "h",
+            "int8": "b",
+            "uint64": "Q",
+            "uint32": "I",
+            "uint16": "H",
+            "uint8": "B",
+        }.get(str(self.dtype), "d")
         buf = b"".join(struct.pack(f"<{fmt}", v) for v in flat)
         with open(self.filename, "wb") as f:
             f.seek(self.offset)

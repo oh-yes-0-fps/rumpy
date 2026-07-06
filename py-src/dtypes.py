@@ -6,7 +6,6 @@ is a plain string, so these classes are lightweight wrappers around the
 numpy dtype-string name.
 """
 
-
 _NAMES = {
     "Bool": "bool",
     "Int8": "int8",
@@ -87,11 +86,13 @@ class ObjectDType(_DTypeBase):
 
 class StringDType(_DTypeBase):
     """Variable-length unicode string dtype (numpy 2.x)."""
+
     name = "string"
 
 
 class VoidDType(_DTypeBase):
     """Void / record dtype."""
+
     name = "void"
 
 
@@ -99,13 +100,13 @@ class VoidDType(_DTypeBase):
 # downstream type-check code keeps working under platform-default widths.
 # rumpy treats every C-named alias as its fixed-width sibling.
 
-ByteDType = _make("Byte", "int8")        # signed char
-UByteDType = _make("UByte", "uint8")     # unsigned char
+ByteDType = _make("Byte", "int8")  # signed char
+UByteDType = _make("UByte", "uint8")  # unsigned char
 ShortDType = _make("Short", "int16")
 UShortDType = _make("UShort", "uint16")
-IntDType = _make("Int", "int32")          # C `int`
+IntDType = _make("Int", "int32")  # C `int`
 UIntDType = _make("UInt", "uint32")
-LongDType = _make("Long", "int64")        # C `long` (LP64 — Unix 64-bit)
+LongDType = _make("Long", "int64")  # C `long` (LP64 — Unix 64-bit)
 ULongDType = _make("ULong", "uint64")
 LongLongDType = _make("LongLong", "int64")
 ULongLongDType = _make("ULongLong", "uint64")

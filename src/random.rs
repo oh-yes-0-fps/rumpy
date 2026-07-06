@@ -27,7 +27,11 @@ fn build_f64<F: FnMut(&mut StdRng) -> f64>(shape: &[usize], mut sampler: F) -> A
     let n: usize = shape.iter().product::<usize>().max(1);
     let mut rng = global().lock().unwrap_or_else(|e| e.into_inner());
     let v: Vec<f64> = (0..n).map(|_| sampler(&mut rng)).collect();
-    let shape = if shape.is_empty() { &[1usize][..] } else { shape };
+    let shape = if shape.is_empty() {
+        &[1usize][..]
+    } else {
+        shape
+    };
     ArraysD::F64(ArrayD::from_shape_vec(IxDyn(shape), v).unwrap_or_default())
 }
 
@@ -35,7 +39,11 @@ fn build_i64<F: FnMut(&mut StdRng) -> i64>(shape: &[usize], mut sampler: F) -> A
     let n: usize = shape.iter().product::<usize>().max(1);
     let mut rng = global().lock().unwrap_or_else(|e| e.into_inner());
     let v: Vec<i64> = (0..n).map(|_| sampler(&mut rng)).collect();
-    let shape = if shape.is_empty() { &[1usize][..] } else { shape };
+    let shape = if shape.is_empty() {
+        &[1usize][..]
+    } else {
+        shape
+    };
     ArraysD::I64(ArrayD::from_shape_vec(IxDyn(shape), v).unwrap_or_default())
 }
 
@@ -61,7 +69,11 @@ pub fn randint(low: i64, high: i64, shape: &[usize]) -> ArraysD {
         let r = rng.random::<u64>() % range;
         v.push(low + r as i64);
     }
-    let shape = if shape.is_empty() { &[1usize][..] } else { shape };
+    let shape = if shape.is_empty() {
+        &[1usize][..]
+    } else {
+        shape
+    };
     ArraysD::I64(ArrayD::from_shape_vec(IxDyn(shape), v).unwrap_or_default())
 }
 
@@ -73,7 +85,11 @@ pub fn uniform(low: f64, high: f64, shape: &[usize]) -> ArraysD {
     for _ in 0..n {
         v.push(low + rng.random::<f64>() * span);
     }
-    let shape = if shape.is_empty() { &[1usize][..] } else { shape };
+    let shape = if shape.is_empty() {
+        &[1usize][..]
+    } else {
+        shape
+    };
     ArraysD::F64(ArrayD::from_shape_vec(IxDyn(shape), v).unwrap_or_default())
 }
 
@@ -104,7 +120,8 @@ pub fn standard_exponential(shape: &[usize]) -> ArraysD {
 }
 
 pub fn gamma(shape_k: f64, scale: f64, shape: &[usize]) -> ArraysD {
-    let d = rand_distr::Gamma::new(shape_k.max(f64::MIN_POSITIVE), scale.max(f64::MIN_POSITIVE)).ok();
+    let d =
+        rand_distr::Gamma::new(shape_k.max(f64::MIN_POSITIVE), scale.max(f64::MIN_POSITIVE)).ok();
     build_f64(shape, move |rng| match &d {
         Some(d) => d.sample(rng),
         None => 0.0,
@@ -176,7 +193,9 @@ pub fn laplace(loc: f64, scale: f64, shape: &[usize]) -> ArraysD {
 
 pub fn logistic(loc: f64, scale: f64, shape: &[usize]) -> ArraysD {
     build_f64(shape, move |rng| {
-        let u: f64 = rng.random::<f64>().clamp(f64::MIN_POSITIVE, 1.0 - f64::MIN_POSITIVE);
+        let u: f64 = rng
+            .random::<f64>()
+            .clamp(f64::MIN_POSITIVE, 1.0 - f64::MIN_POSITIVE);
         loc + scale.max(0.0) * (u / (1.0 - u)).ln()
     })
 }
@@ -253,7 +272,8 @@ pub fn wald(mean: f64, scale: f64, shape: &[usize]) -> ArraysD {
     build_f64(shape, move |rng| {
         let v: f64 = rand_distr::StandardNormal.sample(rng);
         let y = v * v;
-        let x = m + (m * m * y) / (2.0 * l) - (m / (2.0 * l)) * (4.0 * m * l * y + m * m * y * y).sqrt();
+        let x = m + (m * m * y) / (2.0 * l)
+            - (m / (2.0 * l)) * (4.0 * m * l * y + m * m * y * y).sqrt();
         let u: f64 = rng.random();
         if u <= m / (m + x) { x } else { m * m / x }
     })
@@ -294,7 +314,11 @@ pub fn geometric(p: f64, shape: &[usize]) -> ArraysD {
 pub fn negative_binomial(n: f64, p: f64, shape: &[usize]) -> ArraysD {
     // NB(n, p) sampled via gamma-poisson mixture:
     //   X ~ Poisson(λ), λ ~ Gamma(n, (1-p)/p).
-    let gamma_dist = rand_distr::Gamma::new(n.max(f64::MIN_POSITIVE), (1.0 - p).max(f64::MIN_POSITIVE) / p.max(f64::MIN_POSITIVE)).ok();
+    let gamma_dist = rand_distr::Gamma::new(
+        n.max(f64::MIN_POSITIVE),
+        (1.0 - p).max(f64::MIN_POSITIVE) / p.max(f64::MIN_POSITIVE),
+    )
+    .ok();
     build_i64(shape, move |rng| match &gamma_dist {
         Some(g) => {
             let lam: f64 = g.sample(rng);
@@ -311,7 +335,8 @@ pub fn hypergeometric(ngood: i64, nbad: i64, nsample: i64, shape: &[usize]) -> A
         (ngood + nbad).max(0) as u64,
         ngood.max(0) as u64,
         nsample.max(0) as u64,
-    ).ok();
+    )
+    .ok();
     build_i64(shape, move |rng| match &d {
         Some(d) => d.sample(rng) as i64,
         None => 0,
@@ -414,17 +439,31 @@ pub fn shuffle(a: &mut ArraysD) {
     for i in (1..n).rev() {
         let j = (rng.random::<u64>() as usize) % (i + 1);
         match a {
-            ArraysD::F64(x) => { let s = x.shape().to_vec(); swap_along_axis0(x, i, j, &s); }
-            ArraysD::F32(x) => { let s = x.shape().to_vec(); swap_along_axis0(x, i, j, &s); }
-            ArraysD::I64(x) => { let s = x.shape().to_vec(); swap_along_axis0(x, i, j, &s); }
-            ArraysD::I32(x) => { let s = x.shape().to_vec(); swap_along_axis0(x, i, j, &s); }
+            ArraysD::F64(x) => {
+                let s = x.shape().to_vec();
+                swap_along_axis0(x, i, j, &s);
+            }
+            ArraysD::F32(x) => {
+                let s = x.shape().to_vec();
+                swap_along_axis0(x, i, j, &s);
+            }
+            ArraysD::I64(x) => {
+                let s = x.shape().to_vec();
+                swap_along_axis0(x, i, j, &s);
+            }
+            ArraysD::I32(x) => {
+                let s = x.shape().to_vec();
+                swap_along_axis0(x, i, j, &s);
+            }
             _ => {}
         }
     }
 }
 
 fn swap_along_axis0<T: Clone>(arr: &mut ArrayD<T>, i: usize, j: usize, shape: &[usize]) {
-    if i == j { return; }
+    if i == j {
+        return;
+    }
     let row_size: usize = shape[1..].iter().product::<usize>().max(1);
     // Non-contiguous arrays can't be sliced flat; for those we walk by
     // ndarray's index API instead. Returning silently on a non-contiguous
@@ -447,7 +486,9 @@ fn swap_along_axis0<T: Clone>(arr: &mut ArrayD<T>, i: usize, j: usize, shape: &[
 pub fn choice(a: &[i64], n: usize, replace: bool) -> ArraysD {
     let mut rng = global().lock().unwrap_or_else(|e| e.into_inner());
     let v: Vec<i64> = if replace || n >= a.len() {
-        (0..n).map(|_| a[(rng.random::<u64>() as usize) % a.len()]).collect()
+        (0..n)
+            .map(|_| a[(rng.random::<u64>() as usize) % a.len()])
+            .collect()
     } else {
         // Without replacement: shuffle and take.
         let mut pool: Vec<i64> = a.to_vec();

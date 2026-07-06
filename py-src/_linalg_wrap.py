@@ -9,7 +9,6 @@ that re-exports every public name from the Rust core plus the canonical
 ``_rust_linalg`` and ``_exceptions`` are injected from Rust.
 """
 
-
 # Re-export every public Rust-side function from `numpy.linalg_rust`.
 for _name in dir(_rust_linalg):
     if not _name.startswith("_"):

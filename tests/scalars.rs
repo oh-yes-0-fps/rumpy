@@ -54,10 +54,23 @@ fn extract(
             data: x.iter().copied().collect(),
         });
     }
-    if obj.is(&vm.ctx.true_value) { return Ok(Out { shape: vec![], data: vec![1.0] }); }
-    if obj.is(&vm.ctx.false_value) { return Ok(Out { shape: vec![], data: vec![0.0] }); }
+    if obj.is(&vm.ctx.true_value) {
+        return Ok(Out {
+            shape: vec![],
+            data: vec![1.0],
+        });
+    }
+    if obj.is(&vm.ctx.false_value) {
+        return Ok(Out {
+            shape: vec![],
+            data: vec![0.0],
+        });
+    }
     if let Ok(f) = obj.try_float(vm) {
-        return Ok(Out { shape: vec![], data: vec![f.to_f64()] });
+        return Ok(Out {
+            shape: vec![],
+            data: vec![f.to_f64()],
+        });
     }
     if let Some(l) = obj.downcast_ref::<RpyList>() {
         let mut shape = Vec::new();

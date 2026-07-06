@@ -51,9 +51,8 @@ pub fn write_to<W: Write>(w: &mut W, arr: &ArraysD) -> std::io::Result<()> {
         )
     })?;
     let shape_part = shape_string(arr.shape());
-    let header_body = format!(
-        "{{'descr': '{descr}', 'fortran_order': False, 'shape': {shape_part}, }}"
-    );
+    let header_body =
+        format!("{{'descr': '{descr}', 'fortran_order': False, 'shape': {shape_part}, }}");
 
     // Total preamble = 10 bytes (magic + version + len) + header bytes
     // must end in '\n' and total length must be a multiple of 64.
@@ -240,7 +239,10 @@ pub fn read_from<R: Read>(r: &mut R) -> Result<ArraysD, LoadError> {
         ));
     }
     let dtype = parse_descr(&descr)?;
-    let nelem: usize = shape.iter().product::<usize>().max(if shape.is_empty() { 1 } else { 0 });
+    let nelem: usize = shape
+        .iter()
+        .product::<usize>()
+        .max(if shape.is_empty() { 1 } else { 0 });
     let nelem = if shape.is_empty() { 1 } else { nelem };
     let arr = read_data(r, dtype, nelem, &shape)?;
     Ok(arr)
@@ -264,7 +266,9 @@ fn get_str_value(s: &str, key: &str) -> Result<String, LoadError> {
         .find(&needle)
         .ok_or_else(|| LoadError::Format(format!("missing key {key}")))?;
     let rest = &s[i + needle.len()..];
-    let colon = rest.find(':').ok_or_else(|| LoadError::Format("bad header".into()))?;
+    let colon = rest
+        .find(':')
+        .ok_or_else(|| LoadError::Format("bad header".into()))?;
     let rest = &rest[colon + 1..];
     let q = rest
         .find('\'')

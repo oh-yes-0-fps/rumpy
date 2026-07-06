@@ -10,13 +10,12 @@ module-init time. This sidesteps the ``import math`` requirement so the
 module works in minimal rustpython builds.
 """
 
-
 # Primitives ``_sqrt``, ``_log``, … are injected from Rust before this
 # file executes; the assignments below are static-analysis fallbacks.
 try:
     _sqrt  # noqa: F821
 except NameError:  # pragma: no cover
-    _sqrt = lambda x: x ** 0.5
+    _sqrt = lambda x: x**0.5
     _log = lambda x: 0.0
     _log10 = lambda x: 0.0
     _log2 = lambda x: 0.0
@@ -131,10 +130,10 @@ def power(x, p):
 
     def f(v):
         if isinstance(v, complex):
-            return v ** p
+            return v**p
         if v < 0 and not float(p).is_integer():
             return complex(v, 0.0) ** p
-        return v ** p
+        return v**p
 
     return _map(x, f)
 

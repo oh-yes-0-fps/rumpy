@@ -33,12 +33,17 @@ class generic:
     _dtype_name = "object"
 
     def __new__(cls, value=0):
-        if cls is generic or cls is number or cls is integer or \
-           cls is signedinteger or cls is unsignedinteger or \
-           cls is inexact or cls is floating or cls is complexfloating:
-            raise TypeError(
-                f"cannot instantiate abstract scalar type {cls.__name__}"
-            )
+        if (
+            cls is generic
+            or cls is number
+            or cls is integer
+            or cls is signedinteger
+            or cls is unsignedinteger
+            or cls is inexact
+            or cls is floating
+            or cls is complexfloating
+        ):
+            raise TypeError(f"cannot instantiate abstract scalar type {cls.__name__}")
         # Build a 0-D ndarray with the configured dtype.
         return _np_array(value, dtype=cls._dtype_name)
 
@@ -158,6 +163,7 @@ uint = uint64
 long = int64
 ulong = uint64
 
+
 # Long-double has the same representation as double in rumpy — no extended
 # precision in the underlying ndarray crate. We expose the names so that
 # `isinstance(x, np.longdouble)` and dtype-name lookups round-trip.
@@ -191,6 +197,7 @@ class character(flexible):
 
 class str_(character):
     """Unicode string scalar."""
+
     _dtype_name = "U"
 
     def __new__(cls, value=""):
@@ -199,6 +206,7 @@ class str_(character):
 
 class bytes_(character):
     """Bytes string scalar."""
+
     _dtype_name = "S"
 
     def __new__(cls, value=b""):
@@ -207,6 +215,7 @@ class bytes_(character):
 
 class object_(generic):
     """Object scalar — wraps any Python object verbatim."""
+
     _dtype_name = "O"
 
     def __new__(cls, value=None):
@@ -215,6 +224,7 @@ class object_(generic):
 
 class void(flexible):
     """Void-type scalar — typically used as record-array element."""
+
     _dtype_name = "V"
 
     def __new__(cls, value=b""):
@@ -224,16 +234,40 @@ class void(flexible):
 # Mappings for introspection.
 sctypeDict = {
     "bool": bool_,
-    "int8": int8, "int16": int16, "int32": int32, "int64": int64,
-    "uint8": uint8, "uint16": uint16, "uint32": uint32, "uint64": uint64,
-    "float16": float16, "float32": float32, "float64": float64,
-    "complex64": complex64, "complex128": complex128,
+    "int8": int8,
+    "int16": int16,
+    "int32": int32,
+    "int64": int64,
+    "uint8": uint8,
+    "uint16": uint16,
+    "uint32": uint32,
+    "uint64": uint64,
+    "float16": float16,
+    "float32": float32,
+    "float64": float64,
+    "complex64": complex64,
+    "complex128": complex128,
 }
 
 ScalarType = (
-    int, float, complex, bool, bytes, str,
-    bool_, int8, int16, int32, int64,
-    uint8, uint16, uint32, uint64,
-    float16, float32, float64,
-    complex64, complex128,
+    int,
+    float,
+    complex,
+    bool,
+    bytes,
+    str,
+    bool_,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
+    complex64,
+    complex128,
 )

@@ -41,7 +41,8 @@ fn rumpy_run(source: &str) -> Out {
             let code = vm
                 .compile(source, rustpython_vm::compiler::Mode::Exec, "<t>".into())
                 .map_err(|e| format!("compile: {e}"))?;
-            vm.run_code_obj(code, scope.clone()).map_err(|e| pyerr(vm, &e))?;
+            vm.run_code_obj(code, scope.clone())
+                .map_err(|e| pyerr(vm, &e))?;
             let r = scope.globals.get_item("result", vm).expect("set result");
             extract(&r, vm).map_err(|e| pyerr(vm, &e))
         })
@@ -71,7 +72,10 @@ fn extract(
         });
     }
     if let Ok(f) = obj.try_float(vm) {
-        return Ok(Out { shape: vec![], data: vec![f.to_f64()] });
+        return Ok(Out {
+            shape: vec![],
+            data: vec![f.to_f64()],
+        });
     }
     if let Some(l) = obj.downcast_ref::<RpyList>() {
         let mut shape = Vec::new();
@@ -175,8 +179,12 @@ result = arr.ravel().tolist()
             None,
         )
         .unwrap();
-        let shape: Vec<usize> =
-            g.get_item("result_shape").unwrap().unwrap().extract().unwrap();
+        let shape: Vec<usize> = g
+            .get_item("result_shape")
+            .unwrap()
+            .unwrap()
+            .extract()
+            .unwrap();
         let data: Vec<f64> = g
             .get_item("result")
             .unwrap()

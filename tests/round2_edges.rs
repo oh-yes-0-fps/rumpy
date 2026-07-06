@@ -113,11 +113,7 @@ fn numpy_run(source: &str) -> Out {
         let g = pyo3::types::PyDict::new(py);
         let np = PyModule::import(py, "numpy")?;
         g.set_item("np", &np)?;
-        py.run(
-            &std::ffi::CString::new(source).unwrap(),
-            Some(&g),
-            None,
-        )?;
+        py.run(&std::ffi::CString::new(source).unwrap(), Some(&g), None)?;
         let result = g.get_item("result")?.unwrap();
         let arr = np.getattr("asarray")?.call1((result,))?;
         let shape: Vec<usize> = arr.getattr("shape")?.extract()?;

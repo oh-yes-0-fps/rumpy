@@ -13,11 +13,7 @@ use crate::promote::promote_many;
 use ndarray::{ArrayD, IxDyn};
 use rustpython_vm::{PyResult, VirtualMachine};
 
-pub fn einsum(
-    spec: &str,
-    operands: &[ArraysD],
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn einsum(spec: &str, operands: &[ArraysD], vm: &VirtualMachine) -> PyResult<ArraysD> {
     let (input_specs, output_spec) = parse_spec(spec, vm)?;
     if input_specs.len() != operands.len() {
         return Err(vm.new_value_error(format!(
@@ -53,8 +49,7 @@ pub fn einsum(
     };
 
     // Collect the size for every distinct label.
-    let mut label_size: std::collections::BTreeMap<char, usize> =
-        std::collections::BTreeMap::new();
+    let mut label_size: std::collections::BTreeMap<char, usize> = std::collections::BTreeMap::new();
     for (s, op) in input_specs.iter().zip(operands.iter()) {
         for (j, &lbl) in s.iter().enumerate() {
             let dim = op.shape()[j];
@@ -120,7 +115,9 @@ pub fn einsum(
             if out_shape.is_empty() {
                 Ok(ArraysD::F64(ArrayD::from_elem(shape, acc[0])))
             } else {
-                Ok(ArraysD::F64(ArrayD::from_shape_vec(shape, acc).unwrap_or_default()))
+                Ok(ArraysD::F64(
+                    ArrayD::from_shape_vec(shape, acc).unwrap_or_default(),
+                ))
             }
         }
         DType::C128 => {
@@ -166,8 +163,7 @@ fn einsum_greedy(
 ) -> PyResult<ArraysD> {
     let mut arrs: Vec<ArraysD> = operands.to_vec();
     // Collect label → size; needed to estimate intermediate sizes.
-    let mut sizes: std::collections::BTreeMap<char, usize> =
-        std::collections::BTreeMap::new();
+    let mut sizes: std::collections::BTreeMap<char, usize> = std::collections::BTreeMap::new();
     for (s, a) in specs.iter().zip(arrs.iter()) {
         for (j, &lbl) in s.iter().enumerate() {
             sizes.insert(lbl, a.shape()[j]);

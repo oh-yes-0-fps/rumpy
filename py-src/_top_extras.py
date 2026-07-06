@@ -11,6 +11,7 @@ without having to thread each one through Rust manually.
 
 # ---- math helpers ----
 
+
 def _pi():
     return _np.pi
 
@@ -83,6 +84,7 @@ def trim_zeros(filt, trim="fb"):
 
 # ---- window functions ----
 
+
 def _window_arange(n):
     return _np.arange(n, dtype="float64")
 
@@ -133,13 +135,40 @@ def _bessel_i0(x):
     ax = abs(x)
     if ax < 3.75:
         y = (x / 3.75) ** 2
-        return 1.0 + y * (3.5156229 + y * (3.0899424 + y * (1.2067492
-            + y * (0.2659732 + y * (0.0360768 + y * 0.0045813)))))
+        return 1.0 + y * (
+            3.5156229
+            + y
+            * (
+                3.0899424
+                + y * (1.2067492 + y * (0.2659732 + y * (0.0360768 + y * 0.0045813)))
+            )
+        )
     y = 3.75 / ax
     base = _np.exp(ax) / _np.sqrt(ax)
-    return base * (0.39894228 + y * (0.01328592 + y * (0.00225319
-        + y * (-0.00157565 + y * (0.00916281 + y * (-0.02057706
-        + y * (0.02635537 + y * (-0.01647633 + y * 0.00392377))))))))
+    return base * (
+        0.39894228
+        + y
+        * (
+            0.01328592
+            + y
+            * (
+                0.00225319
+                + y
+                * (
+                    -0.00157565
+                    + y
+                    * (
+                        0.00916281
+                        + y
+                        * (
+                            -0.02057706
+                            + y * (0.02635537 + y * (-0.01647633 + y * 0.00392377))
+                        )
+                    )
+                )
+            )
+        )
+    )
 
 
 def i0(x):
@@ -164,6 +193,7 @@ def kaiser(M, beta):
 
 
 # ---- index helpers ----
+
 
 def broadcast_shapes(*shapes):
     """Compute the shape that all input shapes broadcast to."""
@@ -203,7 +233,11 @@ def vander(x, N=None, increasing=False):
         powers = range(N - 1, -1, -1)
     for p in powers:
         cols.append(_np.power(x, p))
-    return _np.column_stack(cols) if hasattr(_np, "column_stack") else _np.stack(cols, axis=1)
+    return (
+        _np.column_stack(cols)
+        if hasattr(_np, "column_stack")
+        else _np.stack(cols, axis=1)
+    )
 
 
 def diag_indices_from(arr):
@@ -273,6 +307,7 @@ def fill_diagonal(a, val, wrap=False):
 
 # ---- set operations ----
 
+
 def ediff1d(ary, to_end=None, to_begin=None):
     """First-order differences of a flat array, optionally padded."""
     a = list(_np.asarray(ary).ravel().tolist())
@@ -293,8 +328,16 @@ def _to_sorted_unique_list(a):
 
 def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
     """Sorted unique values present in both inputs."""
-    s1 = _to_sorted_unique_list(ar1) if not assume_unique else list(_np.asarray(ar1).ravel().tolist())
-    s2 = set(_to_sorted_unique_list(ar2) if not assume_unique else _np.asarray(ar2).ravel().tolist())
+    s1 = (
+        _to_sorted_unique_list(ar1)
+        if not assume_unique
+        else list(_np.asarray(ar1).ravel().tolist())
+    )
+    s2 = set(
+        _to_sorted_unique_list(ar2)
+        if not assume_unique
+        else _np.asarray(ar2).ravel().tolist()
+    )
     out = sorted(v for v in s1 if v in s2)
     if return_indices:
         flat1 = list(_np.asarray(ar1).ravel().tolist())
@@ -307,12 +350,18 @@ def intersect1d(ar1, ar2, assume_unique=False, return_indices=False):
 
 def union1d(ar1, ar2):
     """Sorted union of the unique values in either input."""
-    return _np.asarray(sorted(set(_to_sorted_unique_list(ar1)) | set(_to_sorted_unique_list(ar2))))
+    return _np.asarray(
+        sorted(set(_to_sorted_unique_list(ar1)) | set(_to_sorted_unique_list(ar2)))
+    )
 
 
 def setdiff1d(ar1, ar2, assume_unique=False):
     """Sorted unique values in ``ar1`` that aren't in ``ar2``."""
-    s1 = _to_sorted_unique_list(ar1) if not assume_unique else list(_np.asarray(ar1).ravel().tolist())
+    s1 = (
+        _to_sorted_unique_list(ar1)
+        if not assume_unique
+        else list(_np.asarray(ar1).ravel().tolist())
+    )
     s2 = set(_np.asarray(ar2).ravel().tolist())
     return _np.asarray(sorted(v for v in s1 if v not in s2))
 
@@ -380,6 +429,7 @@ def unique_all(ar):
 
 # ---- histograms ----
 
+
 def digitize(x, bins, right=False):
     """Return indices of bins to which each value belongs."""
     x_list = list(_np.asarray(x).ravel().tolist())
@@ -430,7 +480,9 @@ def histogram2d(x, y, bins=10, range=None, weights=None):
     yf = list(_np.asarray(y).ravel().tolist())
     if isinstance(bins, int):
         bx = by = bins
-    elif isinstance(bins, (list, tuple)) and len(bins) == 2 and isinstance(bins[0], int):
+    elif (
+        isinstance(bins, (list, tuple)) and len(bins) == 2 and isinstance(bins[0], int)
+    ):
         bx, by = bins
     else:
         bx = by = 10
@@ -467,7 +519,10 @@ def histogramdd(sample, bins=10, range=None, weights=None):
         bin_counts = list(bins)
     if range is None:
         ranges = [
-            (float(min(arr[:, d].ravel().tolist())), float(max(arr[:, d].ravel().tolist())))
+            (
+                float(min(arr[:, d].ravel().tolist())),
+                float(max(arr[:, d].ravel().tolist())),
+            )
             for d in builtins_range(n_dims)
         ]
     else:
@@ -502,6 +557,7 @@ def _prod(seq):
 
 
 # ---- "method on array" exposed as a function ----
+
 
 def copy(a):
     """Return an array copy."""
@@ -567,6 +623,7 @@ def take(a, indices, axis=None, out=None):
 
 # ---- matrix transpose / vec ops (array-API names) ----
 
+
 def matrix_transpose(a):
     """Transpose the last two axes."""
     arr = _np.asarray(a)
@@ -603,6 +660,7 @@ def unstack(x, axis=0):
 
 # ---- predicates ----
 
+
 def isfortran(a):
     """Return False — rumpy's ndarray is always C-contiguous."""
     _ = a
@@ -611,12 +669,14 @@ def isfortran(a):
 
 def issubdtype(a, b):
     """``True`` if ``a`` is a subclass of ``b`` in the dtype hierarchy."""
+
     def cls(x):
         if isinstance(x, type):
             return x
         # `np.dtype("int32")` → look up corresponding scalar class.
         name = getattr(x, "name", None) or str(x)
         return _np.sctypeDict.get(name, type(None))
+
     return issubclass(cls(a), cls(b))
 
 
@@ -630,16 +690,31 @@ def isdtype(dtype, kind):
         "signed integer": {"int8", "int16", "int32", "int64"},
         "unsigned integer": {"uint8", "uint16", "uint32", "uint64"},
         "integral": {
-            "int8", "int16", "int32", "int64",
-            "uint8", "uint16", "uint32", "uint64",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
         },
         "real floating": {"float16", "float32", "float64"},
         "complex floating": {"complex64", "complex128"},
         "numeric": {
-            "int8", "int16", "int32", "int64",
-            "uint8", "uint16", "uint32", "uint64",
-            "float16", "float32", "float64",
-            "complex64", "complex128",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "float16",
+            "float32",
+            "float64",
+            "complex64",
+            "complex128",
         },
     }
     if isinstance(kind, str):
@@ -674,6 +749,7 @@ def bitwise_count(x):
 
 # ---- text/console output (real numpy uses these for repr) ----
 
+
 def array_repr(a, max_line_width=None, precision=None, suppress_small=None):
     _ = (max_line_width, precision, suppress_small)
     return repr(_np.asarray(a))
@@ -701,14 +777,35 @@ def array2string(
     *,
     legacy=None,
 ):
-    _ = (max_line_width, precision, suppress_small, separator, prefix, style,
-         formatter, threshold, edgeitems, sign, floatmode, suffix, legacy)
+    _ = (
+        max_line_width,
+        precision,
+        suppress_small,
+        separator,
+        prefix,
+        style,
+        formatter,
+        threshold,
+        edgeitems,
+        sign,
+        floatmode,
+        suffix,
+        legacy,
+    )
     return str(_np.asarray(a))
 
 
-def format_float_positional(x, precision=None, unique=True, fractional=True,
-                             trim="k", sign=False, pad_left=None, pad_right=None,
-                             min_digits=None):
+def format_float_positional(
+    x,
+    precision=None,
+    unique=True,
+    fractional=True,
+    trim="k",
+    sign=False,
+    pad_left=None,
+    pad_right=None,
+    min_digits=None,
+):
     _ = (unique, fractional, trim, pad_left, pad_right, min_digits)
     val = float(x)
     if precision is None:
@@ -720,8 +817,16 @@ def format_float_positional(x, precision=None, unique=True, fractional=True,
     return s
 
 
-def format_float_scientific(x, precision=None, unique=True, trim="k", sign=False,
-                              pad_left=None, exp_digits=None, min_digits=None):
+def format_float_scientific(
+    x,
+    precision=None,
+    unique=True,
+    trim="k",
+    sign=False,
+    pad_left=None,
+    exp_digits=None,
+    min_digits=None,
+):
     _ = (unique, trim, pad_left, exp_digits, min_digits)
     val = float(x)
     if precision is None:
@@ -803,10 +908,12 @@ def seterrcall(func):
 
 # ---- buffer / file-like sources ----
 
+
 def frombuffer(buffer, dtype="float64", count=-1, offset=0):
     """Materialize bytes ``buffer`` as a 1-D array of ``dtype``."""
     raw = bytes(buffer)[offset:]
     import struct
+
     fmts = {
         "float64": ("d", 8),
         "float32": ("f", 4),
@@ -864,6 +971,7 @@ def fromregex(file, regexp, dtype="float64", encoding=None):
     """Read lines from ``file``, extract groups via ``regexp``, build an array."""
     _ = encoding
     import re
+
     pattern = re.compile(regexp) if isinstance(regexp, str) else regexp
     if hasattr(file, "read"):
         text = file.read()
@@ -877,19 +985,50 @@ def fromregex(file, regexp, dtype="float64", encoding=None):
     return _np.asarray(out, dtype=dtype)
 
 
-def genfromtxt(fname, dtype="float64", comments="#", delimiter=None,
-               skip_header=0, skip_footer=0, converters=None,
-               missing_values=None, filling_values=None, usecols=None,
-               names=None, excludelist=None, deletechars=None,
-               replace_space=None, autostrip=False, case_sensitive=True,
-               defaultfmt="f%i", unpack=None, usemask=False,
-               loose=True, invalid_raise=True, max_rows=None, encoding=None,
-               *, ndmin=0, like=None):
+def genfromtxt(
+    fname,
+    dtype="float64",
+    comments="#",
+    delimiter=None,
+    skip_header=0,
+    skip_footer=0,
+    converters=None,
+    missing_values=None,
+    filling_values=None,
+    usecols=None,
+    names=None,
+    excludelist=None,
+    deletechars=None,
+    replace_space=None,
+    autostrip=False,
+    case_sensitive=True,
+    defaultfmt="f%i",
+    unpack=None,
+    usemask=False,
+    loose=True,
+    invalid_raise=True,
+    max_rows=None,
+    encoding=None,
+    *,
+    ndmin=0,
+    like=None,
+):
     """Slim ``genfromtxt`` — reads numeric whitespace/delimited text."""
     _ = (
-        missing_values, filling_values, names, excludelist, deletechars,
-        replace_space, case_sensitive, defaultfmt, usemask, loose, invalid_raise,
-        encoding, ndmin, like,
+        missing_values,
+        filling_values,
+        names,
+        excludelist,
+        deletechars,
+        replace_space,
+        case_sensitive,
+        defaultfmt,
+        usemask,
+        loose,
+        invalid_raise,
+        encoding,
+        ndmin,
+        like,
     )
     if hasattr(fname, "read"):
         text = fname.read()
@@ -1004,6 +1143,7 @@ def may_share_memory(a, b, max_work=None):
 
 # ---- introspection / shims ----
 
+
 def info(obj=None, maxwidth=76, output=None, toplevel="numpy"):
     """Print short docstring of ``obj`` to ``output`` (default stdout)."""
     _ = (maxwidth, toplevel)
@@ -1056,17 +1196,27 @@ def mintypecode(typechars, typeset="GDFgdf", default="d"):
 def typename(char):
     """Return a human-readable name for a type character."""
     names = {
-        "b": "signed char", "B": "unsigned char",
-        "h": "short", "H": "unsigned short",
-        "i": "integer", "I": "unsigned integer",
-        "l": "long integer", "L": "unsigned long integer",
-        "q": "long long integer", "Q": "unsigned long long integer",
-        "f": "single precision", "d": "double precision",
+        "b": "signed char",
+        "B": "unsigned char",
+        "h": "short",
+        "H": "unsigned short",
+        "i": "integer",
+        "I": "unsigned integer",
+        "l": "long integer",
+        "L": "unsigned long integer",
+        "q": "long long integer",
+        "Q": "unsigned long long integer",
+        "f": "single precision",
+        "d": "double precision",
         "g": "long precision",
         "F": "complex single precision",
         "D": "complex double precision",
         "G": "complex long double precision",
-        "?": "bool", "O": "object", "S": "string", "U": "unicode", "V": "void",
+        "?": "bool",
+        "O": "object",
+        "S": "string",
+        "U": "unicode",
+        "V": "void",
     }
     return names.get(char, "unknown")
 
@@ -1086,13 +1236,17 @@ typecodes = {
 
 # ---- piecewise / select / apply_over_axes ----
 
+
 def select(condlist, choicelist, default=0):
     """Element-wise: pick from ``choicelist`` based on first true in ``condlist``."""
     if not condlist:
         return _np.asarray(default)
     shape = _np.asarray(condlist[0]).shape
-    out = _np.full(shape, default, dtype="float64") if hasattr(_np, "full") \
+    out = (
+        _np.full(shape, default, dtype="float64")
+        if hasattr(_np, "full")
         else _np.zeros(shape) + default
+    )
     # Process in reverse so earlier conditions take precedence.
     for cond, choice in zip(reversed(condlist), reversed(choicelist)):
         out = _np.where(cond, choice, out)
@@ -1213,24 +1367,30 @@ class poly1d:
 
     def __add__(self, other):
         if isinstance(other, poly1d):
-            return poly1d(_descending_to_ascending(
-                _np.polynomial.polyadd(
-                    _descending_to_ascending(self._c),
-                    _descending_to_ascending(other._c),
+            return poly1d(
+                _descending_to_ascending(
+                    _np.polynomial.polyadd(
+                        _descending_to_ascending(self._c),
+                        _descending_to_ascending(other._c),
+                    )
                 )
-            ))
-        return poly1d(_descending_to_ascending(
-            _np.polynomial.polyadd(_descending_to_ascending(self._c), [other])
-        ))
+            )
+        return poly1d(
+            _descending_to_ascending(
+                _np.polynomial.polyadd(_descending_to_ascending(self._c), [other])
+            )
+        )
 
     def __mul__(self, other):
         if isinstance(other, poly1d):
-            return poly1d(_descending_to_ascending(
-                _np.polynomial.polymul(
-                    _descending_to_ascending(self._c),
-                    _descending_to_ascending(other._c),
+            return poly1d(
+                _descending_to_ascending(
+                    _np.polynomial.polymul(
+                        _descending_to_ascending(self._c),
+                        _descending_to_ascending(other._c),
+                    )
                 )
-            ))
+            )
         return poly1d([c * other for c in self._c])
 
 
@@ -1302,48 +1462,120 @@ class ufunc:
 
 __all__ = [
     # math
-    "sinc", "float_power", "logaddexp", "logaddexp2", "nan_to_num",
-    "real_if_close", "trim_zeros",
+    "sinc",
+    "float_power",
+    "logaddexp",
+    "logaddexp2",
+    "nan_to_num",
+    "real_if_close",
+    "trim_zeros",
     # windows
-    "bartlett", "hamming", "hanning", "blackman", "kaiser", "i0",
+    "bartlett",
+    "hamming",
+    "hanning",
+    "blackman",
+    "kaiser",
+    "i0",
     # index helpers
-    "broadcast_shapes", "vander", "diag_indices_from",
-    "tril_indices_from", "triu_indices_from", "mask_indices", "fill_diagonal",
+    "broadcast_shapes",
+    "vander",
+    "diag_indices_from",
+    "tril_indices_from",
+    "triu_indices_from",
+    "mask_indices",
+    "fill_diagonal",
     # set ops
-    "ediff1d", "intersect1d", "union1d", "setdiff1d", "setxor1d", "isin",
-    "sort_complex", "unique_values", "unique_counts", "unique_inverse", "unique_all",
+    "ediff1d",
+    "intersect1d",
+    "union1d",
+    "setdiff1d",
+    "setxor1d",
+    "isin",
+    "sort_complex",
+    "unique_values",
+    "unique_counts",
+    "unique_inverse",
+    "unique_all",
     # histograms
-    "digitize", "histogram_bin_edges", "histogram2d", "histogramdd",
+    "digitize",
+    "histogram_bin_edges",
+    "histogram2d",
+    "histogramdd",
     # method-as-function
-    "copy", "ravel", "shape", "size", "ndim", "astype", "diagonal",
-    "std", "var", "take",
+    "copy",
+    "ravel",
+    "shape",
+    "size",
+    "ndim",
+    "astype",
+    "diagonal",
+    "std",
+    "var",
+    "take",
     # matrix / vec
-    "matrix_transpose", "vecdot", "matvec", "vecmat", "unstack",
+    "matrix_transpose",
+    "vecdot",
+    "matvec",
+    "vecmat",
+    "unstack",
     # predicates
-    "isfortran", "issubdtype", "isdtype", "isnat", "iterable", "bitwise_count",
+    "isfortran",
+    "issubdtype",
+    "isdtype",
+    "isnat",
+    "iterable",
+    "bitwise_count",
     # text I/O
-    "array_repr", "array_str", "array2string",
-    "format_float_positional", "format_float_scientific",
-    "set_printoptions", "get_printoptions", "printoptions",
-    "getbufsize", "setbufsize", "seterrcall",
+    "array_repr",
+    "array_str",
+    "array2string",
+    "format_float_positional",
+    "format_float_scientific",
+    "set_printoptions",
+    "get_printoptions",
+    "printoptions",
+    "getbufsize",
+    "setbufsize",
+    "seterrcall",
     # I/O sources
-    "frombuffer", "from_dlpack", "fromfunction", "fromregex", "genfromtxt",
+    "frombuffer",
+    "from_dlpack",
+    "fromfunction",
+    "fromregex",
+    "genfromtxt",
     "asarray_chkfinite",
     # packbits family
-    "packbits", "unpackbits", "putmask",
+    "packbits",
+    "unpackbits",
+    "putmask",
     # memory helpers
-    "shares_memory", "may_share_memory",
+    "shares_memory",
+    "may_share_memory",
     # introspection
-    "info", "show_config", "show_runtime", "get_include", "test",
-    "common_type", "mintypecode", "typename", "typecodes",
+    "info",
+    "show_config",
+    "show_runtime",
+    "get_include",
+    "test",
+    "common_type",
+    "mintypecode",
+    "typename",
+    "typecodes",
     # piecewise / select
-    "select", "piecewise", "apply_over_axes",
+    "select",
+    "piecewise",
+    "apply_over_axes",
     # einsum path
     "einsum_path",
     # index_exp
     "index_exp",
     # legacy poly1d family
-    "poly1d", "poly", "polyadd", "polysub", "polymul", "polydiv",
+    "poly1d",
+    "poly",
+    "polyadd",
+    "polysub",
+    "polymul",
+    "polydiv",
     # ufunc base class
     "ufunc",
 ]

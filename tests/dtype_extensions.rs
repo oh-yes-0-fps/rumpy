@@ -6,7 +6,7 @@
 //! semantics overlap.
 
 use rustpython_vm::Interpreter;
-use rustpython_vm::builtins::{PyDict, PyStr, PyTuple, PyInt};
+use rustpython_vm::builtins::{PyDict, PyInt, PyStr, PyTuple};
 use rustpython_vm::{AsObject, PyObjectRef, PyResult, VirtualMachine};
 
 fn rumpy_interp() -> Interpreter {
@@ -114,14 +114,14 @@ result = (arr.dtype.name, arr.shape, arr[1])
 "#,
         |obj, vm| {
             let t = obj.downcast_ref::<PyTuple>().unwrap();
-            assert_eq!(pystr_to_string(t.get(0).unwrap()).as_deref(), Some("object"));
+            assert_eq!(
+                pystr_to_string(t.get(0).unwrap()).as_deref(),
+                Some("object")
+            );
             let shape = t.get(1).unwrap().downcast_ref::<PyTuple>().unwrap();
             assert_eq!(shape.len(), 1);
             // arr[1] should be the literal string "two"
-            assert_eq!(
-                pystr_to_string(t.get(2).unwrap()).as_deref(),
-                Some("two"),
-            );
+            assert_eq!(pystr_to_string(t.get(2).unwrap()).as_deref(), Some("two"),);
             let _ = vm;
             Ok(())
         },
@@ -408,8 +408,7 @@ arr.sum()
         "(allowed both success and clean error) got: {kind}"
     );
     assert_ne!(
-        kind,
-        "<panic>",
+        kind, "<panic>",
         "operation must not panic — observed kind: {kind}"
     );
 }
@@ -454,7 +453,10 @@ result = (
             // Drop it from the check; just verify the unsigned ones wrap.
             for i in 1..t.len() {
                 let item = t.get(i).unwrap();
-                assert!(item.is(&vm.ctx.true_value), "uint case {i} did not wrap: {item:?}");
+                assert!(
+                    item.is(&vm.ctx.true_value),
+                    "uint case {i} did not wrap: {item:?}"
+                );
             }
             // Sanity: signed case is False (127+1 = -128, not 0)
             assert!(t.get(0).unwrap().is(&vm.ctx.false_value));

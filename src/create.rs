@@ -28,9 +28,7 @@ pub fn zeros(shape: &[usize], dtype: DType) -> ArraysD {
         // PyObjectRef without a vm — callers needing object zeros should use
         // `zeros_object(vm, shape)` in lib.rs. As a fallback we return an
         // empty 1D array so downstream code at least sees the right dtype.
-        DType::Object => ArraysD::Object(
-            crate::internal::empty_array(),
-        ),
+        DType::Object => ArraysD::Object(crate::internal::empty_array()),
         DType::Str(n) => ArraysD::Str {
             itemsize_chars: n,
             data: ArrayD::from_elem(s, String::new()),
@@ -39,8 +37,14 @@ pub fn zeros(shape: &[usize], dtype: DType) -> ArraysD {
             itemsize: n,
             data: ArrayD::from_elem(s, vec![0u8; n as usize]),
         },
-        DType::Datetime64(u) => ArraysD::Datetime64 { unit: u, data: ArrayD::zeros(s) },
-        DType::Timedelta64(u) => ArraysD::Timedelta64 { unit: u, data: ArrayD::zeros(s) },
+        DType::Datetime64(u) => ArraysD::Datetime64 {
+            unit: u,
+            data: ArrayD::zeros(s),
+        },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 {
+            unit: u,
+            data: ArrayD::zeros(s),
+        },
         DType::Void(n) => {
             let _ = nelem;
             ArraysD::Void {
@@ -71,15 +75,27 @@ pub fn ones(shape: &[usize], dtype: DType) -> ArraysD {
         // For non-numeric types "one" isn't well-defined; numpy returns
         // arrays of "1"-ish defaults (e.g. b'1' for bytes). We use the
         // matching numeric meaning where possible.
-        DType::Datetime64(u) => ArraysD::Datetime64 { unit: u, data: ArrayD::from_elem(s, 1) },
-        DType::Timedelta64(u) => ArraysD::Timedelta64 { unit: u, data: ArrayD::from_elem(s, 1) },
-        DType::Str(n) => ArraysD::Str { itemsize_chars: n, data: ArrayD::from_elem(s, "1".to_string()) },
+        DType::Datetime64(u) => ArraysD::Datetime64 {
+            unit: u,
+            data: ArrayD::from_elem(s, 1),
+        },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 {
+            unit: u,
+            data: ArrayD::from_elem(s, 1),
+        },
+        DType::Str(n) => ArraysD::Str {
+            itemsize_chars: n,
+            data: ArrayD::from_elem(s, "1".to_string()),
+        },
         DType::Bytes(n) => {
             let mut buf = vec![0u8; n as usize];
             if !buf.is_empty() {
                 buf[0] = b'1';
             }
-            ArraysD::Bytes { itemsize: n, data: ArrayD::from_elem(s, buf) }
+            ArraysD::Bytes {
+                itemsize: n,
+                data: ArrayD::from_elem(s, buf),
+            }
         }
         DType::Object => ArraysD::Object(crate::internal::empty_array()),
         DType::Void(n) => ArraysD::Void {
@@ -106,13 +122,25 @@ pub fn full_f64(shape: &[usize], value: f64, dtype: DType) -> ArraysD {
         DType::F64 => ArraysD::F64(ArrayD::from_elem(s, value)),
         DType::C64 => ArraysD::C64(ArrayD::from_elem(s, C32::new(value as f32, 0.0))),
         DType::C128 => ArraysD::C128(ArrayD::from_elem(s, C64::new(value, 0.0))),
-        DType::Datetime64(u) => ArraysD::Datetime64 { unit: u, data: ArrayD::from_elem(s, value as i64) },
-        DType::Timedelta64(u) => ArraysD::Timedelta64 { unit: u, data: ArrayD::from_elem(s, value as i64) },
-        DType::Str(n) => ArraysD::Str { itemsize_chars: n, data: ArrayD::from_elem(s, format!("{value}")) },
+        DType::Datetime64(u) => ArraysD::Datetime64 {
+            unit: u,
+            data: ArrayD::from_elem(s, value as i64),
+        },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 {
+            unit: u,
+            data: ArrayD::from_elem(s, value as i64),
+        },
+        DType::Str(n) => ArraysD::Str {
+            itemsize_chars: n,
+            data: ArrayD::from_elem(s, format!("{value}")),
+        },
         DType::Bytes(n) => {
             let mut bytes = format!("{value}").into_bytes();
             bytes.resize(n as usize, 0);
-            ArraysD::Bytes { itemsize: n, data: ArrayD::from_elem(s, bytes) }
+            ArraysD::Bytes {
+                itemsize: n,
+                data: ArrayD::from_elem(s, bytes),
+            }
         }
         DType::Object => ArraysD::Object(crate::internal::empty_array()),
         DType::Void(n) => ArraysD::Void {

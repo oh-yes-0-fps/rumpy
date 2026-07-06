@@ -21,7 +21,9 @@ class Arrayterator:
     def __init__(self, var, buf_size=None):
         self.var = var
         self.buf_size = buf_size
-        self.shape = getattr(var, "shape", (len(var),) if hasattr(var, "__len__") else ())
+        self.shape = getattr(
+            var, "shape", (len(var),) if hasattr(var, "__len__") else ()
+        )
         self.start = [0] * len(self.shape)
         self.stop = list(self.shape)
         self.step = [1] * len(self.shape)
@@ -70,7 +72,17 @@ class NumpyVersion:
         parts = vstring.split(".")
         major = int(parts[0]) if parts and parts[0].isdigit() else 0
         minor = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-        bugfix = int(parts[2]) if len(parts) > 2 and parts[2].split("a")[0].split("b")[0].split("rc")[0].split("+")[0].isdigit() else 0
+        bugfix = (
+            int(parts[2])
+            if len(parts) > 2
+            and parts[2]
+            .split("a")[0]
+            .split("b")[0]
+            .split("rc")[0]
+            .split("+")[0]
+            .isdigit()
+            else 0
+        )
         self.major = major
         self.minor = minor
         self.bugfix = bugfix
@@ -130,6 +142,7 @@ tracemalloc_domain = 389047
 
 # ---- Sub-namespaces that real numpy exposes as ``numpy.lib.X`` ----
 
+
 class _Namespace:
     """Tiny attribute namespace used to mimic numpy.lib's stripped-down submodules."""
 
@@ -167,7 +180,7 @@ array_utils = _Namespace(
 format = _Namespace(
     MAGIC_PREFIX=b"\x93NUMPY",
     MAGIC_LEN=8,
-    BUFFER_SIZE=2 ** 16,
+    BUFFER_SIZE=2**16,
     GROWTH_AXIS_MAX_DIGITS=21,
     ARRAY_ALIGN=64,
     EXPECTED_KEYS={"descr", "fortran_order", "shape"},
@@ -200,6 +213,7 @@ def _import_emath():
     # Lazy import to avoid pulling numpy in at module load time.
     try:
         import numpy
+
         return numpy.emath
     except ImportError:
         return _Namespace()

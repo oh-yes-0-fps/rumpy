@@ -26,11 +26,7 @@ fn run_in_rumpy(source: &str) -> RumpyResult {
     let outcome = interp.enter(|vm| -> Result<RumpyResult, String> {
         let scope = vm.new_scope_with_builtins();
         let code = vm
-            .compile(
-                source,
-                rustpython_vm::compiler::Mode::Exec,
-                "<test>".into(),
-            )
+            .compile(source, rustpython_vm::compiler::Mode::Exec, "<test>".into())
             .map_err(|e| format!("compile error: {e}"))?;
         vm.run_code_obj(code, scope.clone())
             .map_err(|e| py_err_string(vm, &e))?;
@@ -141,7 +137,11 @@ fn run_in_numpy(source: &str) -> NumpyResult {
         globals.set_item("numpy", &numpy)?;
         globals.set_item("np", &numpy)?;
 
-        py.run(&std::ffi::CString::new(source).unwrap(), Some(&globals), None)?;
+        py.run(
+            &std::ffi::CString::new(source).unwrap(),
+            Some(&globals),
+            None,
+        )?;
         let result = globals.get_item("result")?.unwrap();
         // Use numpy itself to canonicalize: shape + flat list.
         let arr = numpy.getattr("asarray")?.call1((result,))?;
@@ -232,9 +232,7 @@ fn eye_and_identity() {
 
 #[test]
 fn array_from_nested_list() {
-    assert_same(
-        "import numpy as np\nresult = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])",
-    );
+    assert_same("import numpy as np\nresult = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])");
 }
 
 #[test]

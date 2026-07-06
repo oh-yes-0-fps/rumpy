@@ -21,8 +21,14 @@ fn array_element_dtype_tags() {
     assert_eq!(<half::f16 as ArrayElement>::DTYPE, DType::F16);
     assert_eq!(<f32 as ArrayElement>::DTYPE, DType::F32);
     assert_eq!(<f64 as ArrayElement>::DTYPE, DType::F64);
-    assert_eq!(<num_complex::Complex<f32> as ArrayElement>::DTYPE, DType::C64);
-    assert_eq!(<num_complex::Complex<f64> as ArrayElement>::DTYPE, DType::C128);
+    assert_eq!(
+        <num_complex::Complex<f32> as ArrayElement>::DTYPE,
+        DType::C64
+    );
+    assert_eq!(
+        <num_complex::Complex<f64> as ArrayElement>::DTYPE,
+        DType::C128
+    );
 }
 
 // --- as_array<T>() borrow ------------------------------------------------
@@ -46,8 +52,9 @@ fn as_array_matches_variant() {
 
 #[test]
 fn as_array_mut_lets_us_mutate() {
-    let mut arrs: ArraysD =
-        ArrayD::<i32>::from_shape_vec(IxDyn(&[3]), vec![1, 2, 3]).unwrap().into();
+    let mut arrs: ArraysD = ArrayD::<i32>::from_shape_vec(IxDyn(&[3]), vec![1, 2, 3])
+        .unwrap()
+        .into();
 
     let view: &mut ArrayD<i32> = arrs.as_i32_mut().expect("is i32");
     view[IxDyn(&[1])] = 42;
@@ -134,10 +141,9 @@ fn pyndarray_as_ref_and_deref() {
 
 #[test]
 fn pyndarray_as_mut_and_deref_mut() {
-    let mut py: PyNdArray =
-        ArrayD::<f64>::from_shape_vec(IxDyn(&[3]), vec![0.0, 0.0, 0.0])
-            .unwrap()
-            .into();
+    let mut py: PyNdArray = ArrayD::<f64>::from_shape_vec(IxDyn(&[3]), vec![0.0, 0.0, 0.0])
+        .unwrap()
+        .into();
 
     // AsMut<ArraysD>
     {
@@ -338,10 +344,20 @@ fn dtype_parse_rejects_unknown_and_legacy() {
 #[test]
 fn dtype_round_trips_through_name_and_parse() {
     for d in [
-        DType::Bool, DType::I8, DType::I16, DType::I32, DType::I64,
-        DType::U8, DType::U16, DType::U32, DType::U64,
-        DType::F16, DType::F32, DType::F64,
-        DType::C64, DType::C128,
+        DType::Bool,
+        DType::I8,
+        DType::I16,
+        DType::I32,
+        DType::I64,
+        DType::U8,
+        DType::U16,
+        DType::U32,
+        DType::U64,
+        DType::F16,
+        DType::F32,
+        DType::F64,
+        DType::C64,
+        DType::C128,
     ] {
         assert_eq!(DType::parse(d.name()), Some(d), "round-trip for {d:?}");
     }
@@ -431,12 +447,9 @@ fn cast_float_to_int_truncates() {
 
 #[test]
 fn cast_bool_to_int_and_back() {
-    let arrs: ArraysD = ArrayD::<bool>::from_shape_vec(
-        IxDyn(&[4]),
-        vec![true, false, true, true],
-    )
-    .unwrap()
-    .into();
+    let arrs: ArraysD = ArrayD::<bool>::from_shape_vec(IxDyn(&[4]), vec![true, false, true, true])
+        .unwrap()
+        .into();
     let as_i32 = arrs.cast(DType::I32);
     let v = as_i32.as_i32().unwrap();
     assert_eq!(v[IxDyn(&[0])], 1);
@@ -490,8 +503,7 @@ fn complex64_round_trip() {
 #[test]
 fn complex128_mutate_via_typed_view() {
     use num_complex::Complex;
-    let mut arrs: ArraysD =
-        ArrayD::<Complex<f64>>::zeros(IxDyn(&[2])).into();
+    let mut arrs: ArraysD = ArrayD::<Complex<f64>>::zeros(IxDyn(&[2])).into();
     {
         let v = arrs.as_c128_mut().unwrap();
         v[IxDyn(&[0])] = Complex::new(0.0, 1.0);
@@ -556,10 +568,20 @@ fn coerce_to_bool() {
 fn create_zeros_each_dtype() {
     use rumpy::create;
     for d in [
-        DType::Bool, DType::I8, DType::I16, DType::I32, DType::I64,
-        DType::U8, DType::U16, DType::U32, DType::U64,
-        DType::F16, DType::F32, DType::F64,
-        DType::C64, DType::C128,
+        DType::Bool,
+        DType::I8,
+        DType::I16,
+        DType::I32,
+        DType::I64,
+        DType::U8,
+        DType::U16,
+        DType::U32,
+        DType::U64,
+        DType::F16,
+        DType::F32,
+        DType::F64,
+        DType::C64,
+        DType::C128,
     ] {
         let a = create::zeros(&[3], d);
         assert_eq!(a.dtype(), d, "zeros dtype for {d:?}");
@@ -579,10 +601,20 @@ fn create_zeros_each_dtype() {
 fn create_ones_each_dtype() {
     use rumpy::create;
     for d in [
-        DType::Bool, DType::I8, DType::I16, DType::I32, DType::I64,
-        DType::U8, DType::U16, DType::U32, DType::U64,
-        DType::F16, DType::F32, DType::F64,
-        DType::C64, DType::C128,
+        DType::Bool,
+        DType::I8,
+        DType::I16,
+        DType::I32,
+        DType::I64,
+        DType::U8,
+        DType::U16,
+        DType::U32,
+        DType::U64,
+        DType::F16,
+        DType::F32,
+        DType::F64,
+        DType::C64,
+        DType::C128,
     ] {
         let a = create::ones(&[4], d);
         assert_eq!(a.dtype(), d);
@@ -678,10 +710,20 @@ fn create_linspace_endpoints_and_edge_cases() {
 #[test]
 fn cast_cross_product_preserves_shape() {
     let dtypes = [
-        DType::Bool, DType::I8, DType::I16, DType::I32, DType::I64,
-        DType::U8, DType::U16, DType::U32, DType::U64,
-        DType::F16, DType::F32, DType::F64,
-        DType::C64, DType::C128,
+        DType::Bool,
+        DType::I8,
+        DType::I16,
+        DType::I32,
+        DType::I64,
+        DType::U8,
+        DType::U16,
+        DType::U32,
+        DType::U64,
+        DType::F16,
+        DType::F32,
+        DType::F64,
+        DType::C64,
+        DType::C128,
     ];
     for &src in &dtypes {
         let a = rumpy::create::ones(&[3, 2], src);
@@ -741,16 +783,16 @@ fn try_from_for_each_dtype() {
     let arrs: ArraysD = owned.into();
     assert!(matches!(arrs, ArraysD::Bool(_)));
     let _: ArrayD<bool> = arrs.try_into().expect("bool");
-    roundtrip!(i8,   ArraysD::I8);
-    roundtrip!(i16,  ArraysD::I16);
-    roundtrip!(i32,  ArraysD::I32);
-    roundtrip!(i64,  ArraysD::I64);
-    roundtrip!(u8,   ArraysD::U8);
-    roundtrip!(u16,  ArraysD::U16);
-    roundtrip!(u32,  ArraysD::U32);
-    roundtrip!(u64,  ArraysD::U64);
-    roundtrip!(f32,  ArraysD::F32);
-    roundtrip!(f64,  ArraysD::F64);
+    roundtrip!(i8, ArraysD::I8);
+    roundtrip!(i16, ArraysD::I16);
+    roundtrip!(i32, ArraysD::I32);
+    roundtrip!(i64, ArraysD::I64);
+    roundtrip!(u8, ArraysD::U8);
+    roundtrip!(u16, ArraysD::U16);
+    roundtrip!(u32, ArraysD::U32);
+    roundtrip!(u64, ArraysD::U64);
+    roundtrip!(f32, ArraysD::F32);
+    roundtrip!(f64, ArraysD::F64);
     // f16 / complex zero-init isn't via ArrayD::zeros — exercise via from_elem.
     use half::f16;
     use num_complex::Complex;
@@ -776,18 +818,18 @@ fn as_array_returns_some_only_for_matching_variant() {
     // returns Some and exactly one of the typed shortcuts is Some.
     let pairs: &[(DType, fn(&ArraysD) -> bool)] = &[
         (DType::Bool, |a| a.as_bool().is_some()),
-        (DType::I8,   |a| a.as_i8().is_some()),
-        (DType::I16,  |a| a.as_i16().is_some()),
-        (DType::I32,  |a| a.as_i32().is_some()),
-        (DType::I64,  |a| a.as_i64().is_some()),
-        (DType::U8,   |a| a.as_u8().is_some()),
-        (DType::U16,  |a| a.as_u16().is_some()),
-        (DType::U32,  |a| a.as_u32().is_some()),
-        (DType::U64,  |a| a.as_u64().is_some()),
-        (DType::F16,  |a| a.as_f16().is_some()),
-        (DType::F32,  |a| a.as_f32().is_some()),
-        (DType::F64,  |a| a.as_f64().is_some()),
-        (DType::C64,  |a| a.as_c64().is_some()),
+        (DType::I8, |a| a.as_i8().is_some()),
+        (DType::I16, |a| a.as_i16().is_some()),
+        (DType::I32, |a| a.as_i32().is_some()),
+        (DType::I64, |a| a.as_i64().is_some()),
+        (DType::U8, |a| a.as_u8().is_some()),
+        (DType::U16, |a| a.as_u16().is_some()),
+        (DType::U32, |a| a.as_u32().is_some()),
+        (DType::U64, |a| a.as_u64().is_some()),
+        (DType::F16, |a| a.as_f16().is_some()),
+        (DType::F32, |a| a.as_f32().is_some()),
+        (DType::F64, |a| a.as_f64().is_some()),
+        (DType::C64, |a| a.as_c64().is_some()),
         (DType::C128, |a| a.as_c128().is_some()),
     ];
     for (i, &(d, check)) in pairs.iter().enumerate() {

@@ -57,7 +57,11 @@ fn run_in_numpy(source: &str) -> Vec<f64> {
         let globals = PyModule::import(py, "builtins")?.dict();
         let numpy = PyModule::import(py, "numpy")?;
         globals.set_item("np", numpy)?;
-        py.run(&std::ffi::CString::new(source).unwrap(), Some(&globals), None)?;
+        py.run(
+            &std::ffi::CString::new(source).unwrap(),
+            Some(&globals),
+            None,
+        )?;
         let result = globals.get_item("result")?.expect("snippet sets result");
         let lst = result.cast_into::<PyList>()?;
         let mut out = Vec::with_capacity(lst.len());
@@ -72,7 +76,11 @@ fn run_in_numpy(source: &str) -> Vec<f64> {
 fn assert_same(src: &str, eps: f64) {
     let r = run_in_rumpy(src);
     let n = run_in_numpy(src);
-    assert_eq!(r.len(), n.len(), "len mismatch\nsrc: {src}\nrumpy: {r:?}\nnumpy: {n:?}");
+    assert_eq!(
+        r.len(),
+        n.len(),
+        "len mismatch\nsrc: {src}\nrumpy: {r:?}\nnumpy: {n:?}"
+    );
     for (i, (a, b)) in r.iter().zip(n.iter()).enumerate() {
         assert_abs_diff_eq!(*a, *b, epsilon = eps);
         let _ = i;

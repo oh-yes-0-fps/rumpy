@@ -24,10 +24,7 @@ fn run(source: &str) {
     let interp = interp();
     interp.enter(|vm| {
         let numpy_mod = vm.import("numpy", 0).expect("import numpy");
-        let sys_modules = vm
-            .sys_module
-            .get_attr("modules", vm)
-            .expect("sys.modules");
+        let sys_modules = vm.sys_module.get_attr("modules", vm).expect("sys.modules");
         for sub in ["rec", "ma", "testing", "polynomial", "random"] {
             if let Ok(m) = numpy_mod.get_attr(sub, vm) {
                 let dotted = format!("numpy.{sub}");
@@ -36,7 +33,11 @@ fn run(source: &str) {
         }
         let scope = vm.new_scope_with_builtins();
         let code = vm
-            .compile(source, rustpython_vm::compiler::Mode::Exec, "<niche>".into())
+            .compile(
+                source,
+                rustpython_vm::compiler::Mode::Exec,
+                "<niche>".into(),
+            )
             .expect("compile");
         if let Err(e) = vm.run_code_obj(code, scope) {
             let mut s = String::new();
@@ -48,8 +49,7 @@ fn run(source: &str) {
 
 #[test]
 fn roots_handles_leading_zeros_and_repeated_roots() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Leading zero coefficient is stripped before forming the companion matrix.
@@ -67,14 +67,12 @@ r = np.roots([1.0, -3.0, 3.0, -1.0])
 assert len(r) == 3
 for z in r:
     assert abs(complex(z) - 1.0) < 1e-4
-"#,
-    );
+"#);
 }
 
 #[test]
 fn roots_complex_pair_for_real_polynomial() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # x^2 + 1 = 0  ->  roots are ±i.
@@ -83,14 +81,12 @@ assert len(r) == 2
 z0, z1 = complex(r[0]), complex(r[1])
 assert abs(z0 - (-1j)) < 1e-10
 assert abs(z1 - 1j) < 1e-10
-"#,
-    );
+"#);
 }
 
 #[test]
 fn matrix_power_zero_one_and_negative() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 a = np.asarray([[2.0, 1.0], [0.0, 3.0]])
@@ -110,14 +106,12 @@ for i in range(2):
     for j in range(2):
         target = 1.0 if i == j else 0.0
         assert abs(prod[i, j] - target) < 1e-10
-"#,
-    );
+"#);
 }
 
 #[test]
 fn slogdet_signs_for_singular_and_dense() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Well-conditioned: sign=+1, logabs = ln|det|.
@@ -137,14 +131,12 @@ s = np.asarray([[1.0, 2.0], [2.0, 4.0]])
 sign, logabs = np.linalg.slogdet(s)
 assert float(sign) == 0.0
 assert float(logabs) == float("-inf")
-"#,
-    );
+"#);
 }
 
 #[test]
 fn pinv_left_and_right_inverse_identities() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Tall (3x2) full column rank: pinv is the left inverse — pinv @ A == I_2.
@@ -164,14 +156,12 @@ for i in range(2):
     for j in range(2):
         target = 1.0 if i == j else 0.0
         assert abs(right[i, j] - target) < 1e-9
-"#,
-    );
+"#);
 }
 
 #[test]
 fn cross_product_3vectors() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 x = np.asarray([1.0, 0.0, 0.0])
@@ -186,14 +176,12 @@ fwd = np.cross(a, b).tolist()
 back = np.cross(b, a).tolist()
 for f, r in zip(fwd, back):
     assert abs(f + r) < 1e-12
-"#,
-    );
+"#);
 }
 
 #[test]
 fn unwrap_undoes_wraparound() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Phase that wraps from +pi to -pi at index 2.
@@ -205,14 +193,12 @@ assert abs(u[2] - (-0.9 * pi + 2 * pi)) < 1e-10
 # Differences between successive unwrapped points stay below pi.
 for prev, cur in zip(u[:-1], u[1:]):
     assert abs(cur - prev) <= pi + 1e-10
-"#,
-    );
+"#);
 }
 
 #[test]
 fn percentile_matches_known_quantiles() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 a = np.asarray([1.0, 2.0, 3.0, 4.0, 5.0])
@@ -224,14 +210,12 @@ assert abs(float(np.percentile(a, 0.0)) - 1.0) < 1e-12
 assert abs(float(np.percentile(a, 100.0)) - 5.0) < 1e-12
 # quantile uses the same engine but takes fractions.
 assert abs(float(np.quantile(a, 0.5)) - 3.0) < 1e-12
-"#,
-    );
+"#);
 }
 
 #[test]
 fn cov_and_corrcoef_perfectly_correlated() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Two rows that are perfectly linearly related (y = 2x).
@@ -247,14 +231,12 @@ assert abs(float(c[0, 1]) - 5.0) < 1e-10
 r = np.corrcoef(m)
 assert abs(float(r[0, 1]) - 1.0) < 1e-10
 assert abs(float(r[1, 0]) - 1.0) < 1e-10
-"#,
-    );
+"#);
 }
 
 #[test]
 fn random_seed_is_reproducible() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 np.random.seed(42)
@@ -267,14 +249,12 @@ assert a == b
 np.random.seed(43)
 c = np.random.rand(5).tolist()
 assert a != c
-"#,
-    );
+"#);
 }
 
 #[test]
 fn rec_fromstring_all_supported_dtypes() {
-    run(
-        r#"
+    run(r#"
 import numpy.rec as r
 
 # Single record carrying every numeric format code we support, plus an
@@ -311,14 +291,12 @@ assert rec.f == 4000000000
 assert abs(rec.g - 1.0) < 1e-6
 assert abs(rec.h - 1.0) < 1e-12
 assert rec.tag == b"hi"
-"#,
-    );
+"#);
 }
 
 #[test]
 fn rec_fromstring_offset_skips_prefix() {
-    run(
-        r#"
+    run(r#"
 import numpy.rec as r
 
 # Prefix 4 bytes of garbage, then two i4 records {7, 9}.
@@ -329,14 +307,12 @@ arr = r.fromstring(buf, formats="i4", names="v", offset=4)
 assert len(arr) == 2
 assert arr[0].v == 7
 assert arr[1].v == 9
-"#,
-    );
+"#);
 }
 
 #[test]
 fn ma_count_with_fully_masked_axis_returns_zero() {
-    run(
-        r#"
+    run(r#"
 import numpy
 ma = numpy.ma
 
@@ -351,14 +327,12 @@ assert got == [3, 0]
 # axis=0 (per-column): each column has the unmasked row 0 cell only.
 got0 = m.count(axis=0).tolist()
 assert got0 == [1, 1, 1]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn norm_ord_variants_match_known_values() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # 1-D vector norms.
@@ -372,14 +346,12 @@ assert abs(float(np.linalg.norm(v, ord=-float("inf"))) - 3.0) < 1e-12
 m = np.asarray([[1.0, 2.0], [3.0, 4.0]])
 fro = float(np.linalg.norm(m, ord="fro"))
 assert abs(fro - (1 + 4 + 9 + 16) ** 0.5) < 1e-12
-"#,
-    );
+"#);
 }
 
 #[test]
 fn ndarray_iterates_over_first_axis() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # 1-D: yields plain Python scalars (one per element).
@@ -421,14 +393,12 @@ else:
 
 # Comprehension equivalence: tolist matches list comprehension on the rows.
 assert [r.tolist() for r in m] == m.tolist()
-"#,
-    );
+"#);
 }
 
 #[test]
 fn ndarray_iter_interops_with_python_builtins() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 a = np.asarray([1.0, 2.0, 3.0, 4.0])
@@ -467,14 +437,12 @@ assert (x, y, z, w) == (1.0, 2.0, 3.0, 4.0)
 # `in` operator uses __iter__ when __contains__ isn't specialized.
 assert 3.0 in a
 assert 99.0 not in a
-"#,
-    );
+"#);
 }
 
 #[test]
 fn ndarray_iter_independence_and_snapshot() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 a = np.asarray([1.0, 2.0, 3.0])
@@ -494,14 +462,12 @@ b = np.asarray([10.0, 20.0, 30.0])
 snap = iter(b)
 b[0] = 999.0
 assert next(snap) == 10.0
-"#,
-    );
+"#);
 }
 
 #[test]
 fn ndarray_iter_preserves_dtype_and_sub_shape() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Int 1-D: each yielded item is a Python int (numpy collapses 0-d to scalar).
@@ -530,14 +496,12 @@ sheets = list(cube)
 assert len(sheets) == 2
 for sheet in sheets:
     assert sheet.shape == (3, 4)
-"#,
-    );
+"#);
 }
 
 #[test]
 fn ndarray_iter_round_trip_through_asarray() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Feeding the iter result back into np.asarray reproduces the original.
@@ -550,14 +514,12 @@ assert rebuilt.tolist() == a.tolist()
 view = a[:, 1:]
 collected = [row.tolist() for row in view]
 assert collected == [[2.0, 3.0], [5.0, 6.0]]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn set_ops_intersect_union_setdiff() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 a = np.asarray([3, 1, 4, 1, 5, 9, 2, 6])
@@ -574,14 +536,12 @@ assert uni == [1, 2, 3, 4, 5, 6, 7, 8, 9]
 # setdiff1d is the sorted unique values in `a` that aren't in `b`.
 diff = np.setdiff1d(a, b).tolist()
 assert diff == [1, 2, 4, 6]
-"#,
-    );
+"#);
 }
 
 #[test]
 fn linalg_cond_reflects_conditioning() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Identity has condition number 1.
@@ -598,14 +558,12 @@ c = float(np.linalg.cond(sing))
 is_inf = c == float("inf") or c == float("-inf")
 is_nan = c != c
 assert is_inf or is_nan or c > 1e14, f"unexpected cond {c}"
-"#,
-    );
+"#);
 }
 
 #[test]
 fn argsort_descending_trick() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 a = np.asarray([3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0])
@@ -621,14 +579,12 @@ desc_idx = np.argsort(-a).tolist()
 descending = [a[i] for i in desc_idx]
 for prev, cur in zip(descending[:-1], descending[1:]):
     assert prev >= cur
-"#,
-    );
+"#);
 }
 
 #[test]
 fn outer_product_complex_and_real() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # Real outer product: shape (m, n) for inputs of length m, n.
@@ -649,14 +605,12 @@ expected = [
 for row_got, row_exp in zip(prod, expected):
     for got, exp in zip(row_got, row_exp):
         assert abs(complex(got) - complex(exp)) < 1e-12
-"#,
-    );
+"#);
 }
 
 #[test]
 fn polyfit_recovers_quadratic_coefficients() {
-    run(
-        r#"
+    run(r#"
 import numpy as np
 
 # y = 2*x^2 - 3*x + 5, sampled exactly.
@@ -667,6 +621,5 @@ coef = np.polyfit(xs, ys, 2).tolist()
 assert abs(coef[0] - 2.0) < 1e-9
 assert abs(coef[1] - (-3.0)) < 1e-9
 assert abs(coef[2] - 5.0) < 1e-9
-"#,
-    );
+"#);
 }

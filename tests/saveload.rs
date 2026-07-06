@@ -59,7 +59,8 @@ result = arr.ravel().tolist()
             let code = vm
                 .compile(&snippet, rustpython_vm::compiler::Mode::Exec, "<t>".into())
                 .map_err(|e| format!("compile: {e}"))?;
-            vm.run_code_obj(code, scope.clone()).map_err(|e| pyerr(vm, &e))?;
+            vm.run_code_obj(code, scope.clone())
+                .map_err(|e| pyerr(vm, &e))?;
             let result = scope.globals.get_item("result", vm).expect("result");
             extract_flat(&result, vm).map_err(|e| pyerr(vm, &e))
         })
@@ -71,9 +72,7 @@ fn extract_flat(
     vm: &rustpython_vm::VirtualMachine,
 ) -> rustpython_vm::PyResult<Vec<f64>> {
     use rustpython_vm::builtins::PyList as RpyList;
-    let l = obj
-        .downcast_ref::<RpyList>()
-        .expect("expected list result");
+    let l = obj.downcast_ref::<RpyList>().expect("expected list result");
     let mut out = Vec::new();
     for it in l.borrow_vec().iter() {
         out.push(it.try_float(vm)?.to_f64());
@@ -106,11 +105,7 @@ result = arr.ravel().tolist()
 "#;
         py.run(&std::ffi::CString::new(src).unwrap(), Some(&g), None)?;
         let shape: Vec<usize> = g.get_item("result_shape")?.unwrap().extract()?;
-        let data: Vec<f64> = g
-            .get_item("result")?
-            .unwrap()
-            .cast::<PyList>()?
-            .extract()?;
+        let data: Vec<f64> = g.get_item("result")?.unwrap().cast::<PyList>()?.extract()?;
         Ok((shape, data))
     })
     .expect("numpy.load failed")
@@ -181,8 +176,20 @@ np.save({path:?}, a)
 fn rumpy_save_then_numpy_load_all_dtypes() {
     // Round-trip every dtype rumpy supports.
     for dt in [
-        "bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
-        "float16", "float32", "float64", "complex64", "complex128",
+        "bool",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "float16",
+        "float32",
+        "float64",
+        "complex64",
+        "complex128",
     ] {
         let p = tmp_path(".npy");
         let path = p.to_string_lossy().into_owned();
@@ -325,7 +332,8 @@ b_list = d["b"].astype("float64").ravel().tolist()
             let code = vm
                 .compile(&snip, rustpython_vm::compiler::Mode::Exec, "<t>".into())
                 .map_err(|e| format!("compile: {e}"))?;
-            vm.run_code_obj(code, scope.clone()).map_err(|e| pyerr(vm, &e))?;
+            vm.run_code_obj(code, scope.clone())
+                .map_err(|e| pyerr(vm, &e))?;
             let a_obj = scope.globals.get_item("a_list", vm).expect("a_list");
             let b_obj = scope.globals.get_item("b_list", vm).expect("b_list");
             Ok((

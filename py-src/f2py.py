@@ -11,6 +11,7 @@ def _unavailable(name):
         raise NotImplementedError(
             f"numpy.f2py.{name} is unavailable in rumpy (no Fortran toolchain)"
         )
+
     _f.__name__ = name
     return _f
 
@@ -30,6 +31,7 @@ def test(*args, **kwargs):
 # numpy. We expose each as a tiny namespace whose attribute lookups raise
 # NotImplementedError. This satisfies ``from numpy.f2py import auxfuncs``
 # without pretending to have a Fortran toolchain underneath.
+
 
 class _F2PySubmoduleStub:
     """Lazy stand-in for an internal numpy.f2py submodule."""
@@ -94,10 +96,27 @@ class VisibleDeprecationWarning(UserWarning):
 
 
 __all__ = [
-    "compile", "run_main", "get_include", "test", "main",
-    "auxfuncs", "capi_maps", "cb_rules", "cfuncs", "common_rules",
-    "crackfortran", "diagnose", "f2py2e", "f90mod_rules", "func2subr",
-    "rules", "symbolic", "use_rules",
-    "os", "sys", "subprocess", "warnings",
+    "compile",
+    "run_main",
+    "get_include",
+    "test",
+    "main",
+    "auxfuncs",
+    "capi_maps",
+    "cb_rules",
+    "cfuncs",
+    "common_rules",
+    "crackfortran",
+    "diagnose",
+    "f2py2e",
+    "f90mod_rules",
+    "func2subr",
+    "rules",
+    "symbolic",
+    "use_rules",
+    "os",
+    "sys",
+    "subprocess",
+    "warnings",
     "VisibleDeprecationWarning",
 ]

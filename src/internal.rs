@@ -7,20 +7,14 @@
 //! helpers so that a logic bug doesn't unwind across the FFI boundary.
 
 use crate::dtype::DType;
-use rustpython_vm::{
-    PyResult, VirtualMachine, builtins::PyBaseException, PyRef,
-};
+use rustpython_vm::{PyRef, PyResult, VirtualMachine, builtins::PyBaseException};
 
 /// Build a Python `TypeError` indicating that an operation isn't defined for
 /// the given dtype. Used by all the numeric-only ops (FFT, linalg, reductions,
 /// elementwise arith on non-numeric variants) to bubble a clean error back
 /// to Python instead of `unreachable!()`'ing.
 #[inline]
-pub fn unsupported_dtype(
-    vm: &VirtualMachine,
-    op: &str,
-    dt: DType,
-) -> PyRef<PyBaseException> {
+pub fn unsupported_dtype(vm: &VirtualMachine, op: &str, dt: DType) -> PyRef<PyBaseException> {
     vm.new_type_error(format!(
         "operation {op:?} not supported for dtype {}",
         dt.name_owned()
@@ -38,20 +32,19 @@ pub fn unsupported_dtype(
 /// constructs a 0-element view that downstream code can safely walk.
 #[inline]
 pub fn empty_array<T: Clone>() -> ndarray::ArrayD<T> {
-    ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[0]), Vec::<T>::new())
-        .unwrap_or_else(|_| {
-            // ndarray invariant violated — fall back to building from the
-            // shape directly. `from_shape_simple_fn` skips the closure for
-            // zero-element shapes, so this also can't panic.
-            ndarray::ArrayD::from_shape_simple_fn(ndarray::IxDyn(&[0]), || {
-                // Unreachable in practice (zero-element shape) — but if it
-                // ever runs we have no element to return. Return a clone
-                // of a heap-allocated `T` would require T: Default, which
-                // we don't have. We can only get here through a fundamental
-                // ndarray bug, in which case the abort path is acceptable.
-                std::process::abort()
-            })
+    ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&[0]), Vec::<T>::new()).unwrap_or_else(|_| {
+        // ndarray invariant violated — fall back to building from the
+        // shape directly. `from_shape_simple_fn` skips the closure for
+        // zero-element shapes, so this also can't panic.
+        ndarray::ArrayD::from_shape_simple_fn(ndarray::IxDyn(&[0]), || {
+            // Unreachable in practice (zero-element shape) — but if it
+            // ever runs we have no element to return. Return a clone
+            // of a heap-allocated `T` would require T: Default, which
+            // we don't have. We can only get here through a fundamental
+            // ndarray bug, in which case the abort path is acceptable.
+            std::process::abort()
         })
+    })
 }
 
 /// Build a Python `RuntimeError` for an "internal invariant violated" case

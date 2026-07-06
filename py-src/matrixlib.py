@@ -270,7 +270,9 @@ def bmat(obj, ldict=None, gdict=None):
             env.update(ldict)
         rows = []
         for row_src in obj.split(";"):
-            parts = [p for p in (q.strip() for q in row_src.replace(",", " ").split()) if p]
+            parts = [
+                p for p in (q.strip() for q in row_src.replace(",", " ").split()) if p
+            ]
             if not parts:
                 continue
             blocks = []

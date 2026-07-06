@@ -49,16 +49,15 @@ fn bool_binary(
     vm: &VirtualMachine,
 ) -> PyResult<ArraysD> {
     let s = broadcast(a.shape(), b.shape()).ok_or_else(|| {
-        vm.new_value_error(format!(
-            "broadcast {:?} vs {:?}",
-            a.shape(),
-            b.shape()
-        ))
+        vm.new_value_error(format!("broadcast {:?} vs {:?}", a.shape(), b.shape()))
     })?;
     let av = a.broadcast(IxDyn(&s)).or_internal(vm, "bool_binary lhs")?;
     let bv = b.broadcast(IxDyn(&s)).or_internal(vm, "bool_binary rhs")?;
     let mut out = ArrayD::<bool>::from_elem(IxDyn(&s), false);
-    Zip::from(&mut out).and(&av).and(&bv).for_each(|o, &p, &q| *o = op(p, q));
+    Zip::from(&mut out)
+        .and(&av)
+        .and(&bv)
+        .for_each(|o, &p, &q| *o = op(p, q));
     Ok(ArraysD::Bool(out))
 }
 
@@ -70,8 +69,16 @@ fn broadcast(a: &[usize], b: &[usize]) -> Option<Vec<usize>> {
     let nd = a.len().max(b.len());
     let mut out = vec![1usize; nd];
     for i in 0..nd {
-        let da = if i + a.len() >= nd { a[i + a.len() - nd] } else { 1 };
-        let db = if i + b.len() >= nd { b[i + b.len() - nd] } else { 1 };
+        let da = if i + a.len() >= nd {
+            a[i + a.len() - nd]
+        } else {
+            1
+        };
+        let db = if i + b.len() >= nd {
+            b[i + b.len() - nd]
+        } else {
+            1
+        };
         out[i] = match (da, db) {
             (x, y) if x == y => x,
             (1, y) => y,
@@ -154,10 +161,17 @@ fn bitwise(
                 (ArraysD::Bool(x), ArraysD::Bool(y)) => (x, y),
                 _ => return Err(internal(vm, "bitwise bool: dtype mismatch after cast")),
             };
-            let xv = x.broadcast(sd.clone()).or_internal(vm, "bitwise bool lhs")?;
-            let yv = y.broadcast(sd.clone()).or_internal(vm, "bitwise bool rhs")?;
+            let xv = x
+                .broadcast(sd.clone())
+                .or_internal(vm, "bitwise bool lhs")?;
+            let yv = y
+                .broadcast(sd.clone())
+                .or_internal(vm, "bitwise bool rhs")?;
             let mut out = ArrayD::<bool>::from_elem(sd.clone(), false);
-            Zip::from(&mut out).and(&xv).and(&yv).for_each(|o, &p, &q| *o = bop(p, q));
+            Zip::from(&mut out)
+                .and(&xv)
+                .and(&yv)
+                .for_each(|o, &p, &q| *o = bop(p, q));
             ArraysD::Bool(out)
         }
         DType::I8 => sint!(I8, i8),
@@ -247,8 +261,16 @@ pub fn isclose(
     vm: &VirtualMachine,
 ) -> PyResult<ArraysD> {
     let pt = promote(a.dtype(), b.dtype());
-    let a = a.cast(pt).cast(if pt.is_complex() { DType::C128 } else { DType::F64 });
-    let b = b.cast(pt).cast(if pt.is_complex() { DType::C128 } else { DType::F64 });
+    let a = a.cast(pt).cast(if pt.is_complex() {
+        DType::C128
+    } else {
+        DType::F64
+    });
+    let b = b.cast(pt).cast(if pt.is_complex() {
+        DType::C128
+    } else {
+        DType::F64
+    });
     let s = broadcast(a.shape(), b.shape())
         .ok_or_else(|| vm.new_value_error("broadcast failure".to_string()))?;
     let sd = IxDyn(&s);
@@ -349,9 +371,10 @@ fn boolean_reduce(
     let nd = a.ndim() as isize;
     let axis = axis.map(|ax| if ax < 0 { ax + nd } else { ax });
     if let Some(ax) = axis
-        && (ax < 0 || ax >= nd) {
-            return Err(vm.new_value_error(format!("axis {ax} out of range")));
-        }
+        && (ax < 0 || ax >= nd)
+    {
+        return Err(vm.new_value_error(format!("axis {ax} out of range")));
+    }
     Ok(match axis {
         None => {
             let v: Vec<bool> = a.iter().copied().collect();
@@ -385,11 +408,7 @@ fn boolean_reduce(
 
 /// numpy `cumsum` — flattens with `axis=None` (default), or accumulates along
 /// the given axis.
-pub fn cumsum_axis(
-    a: &ArraysD,
-    axis: Option<isize>,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn cumsum_axis(a: &ArraysD, axis: Option<isize>, vm: &VirtualMachine) -> PyResult<ArraysD> {
     match axis {
         None => cumsum(a, vm),
         Some(ax) => {
@@ -403,11 +422,7 @@ pub fn cumsum_axis(
     }
 }
 
-pub fn cumprod_axis(
-    a: &ArraysD,
-    axis: Option<isize>,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn cumprod_axis(a: &ArraysD, axis: Option<isize>, vm: &VirtualMachine) -> PyResult<ArraysD> {
     match axis {
         None => cumprod(a, vm),
         Some(ax) => {
@@ -496,11 +511,7 @@ fn cumulate_along_axis(
 pub fn cumsum(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     // numpy: cumulative along flattened array by default; we expose flat only.
     let widened = match a.dtype() {
-        DType::Bool
-        | DType::I8
-        | DType::I16
-        | DType::I32
-        | DType::I64 => a.cast(DType::I64),
+        DType::Bool | DType::I8 | DType::I16 | DType::I32 | DType::I64 => a.cast(DType::I64),
         DType::U8 | DType::U16 | DType::U32 | DType::U64 => a.cast(DType::U64),
         _ => a.clone(),
     };
@@ -588,11 +599,7 @@ pub fn cumsum(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
 
 pub fn cumprod(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let widened = match a.dtype() {
-        DType::Bool
-        | DType::I8
-        | DType::I16
-        | DType::I32
-        | DType::I64 => a.cast(DType::I64),
+        DType::Bool | DType::I8 | DType::I16 | DType::I32 | DType::I64 => a.cast(DType::I64),
         DType::U8 | DType::U16 | DType::U32 | DType::U64 => a.cast(DType::U64),
         _ => a.clone(),
     };
@@ -656,11 +663,7 @@ pub fn cumprod(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     })
 }
 
-pub fn diff_axis(
-    a: &ArraysD,
-    axis: Option<isize>,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn diff_axis(a: &ArraysD, axis: Option<isize>, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let ax = axis.unwrap_or(-1);
     let nd = a.ndim() as isize;
     if nd == 0 {
@@ -685,9 +688,10 @@ pub fn diff_axis(
                 let lhs = $arr.index_axis(Axis(axis_idx), k);
                 let rhs = $arr.index_axis(Axis(axis_idx), k - 1);
                 let mut out_slice = out.index_axis_mut(Axis(axis_idx), k - 1);
-                ndarray::Zip::from(&mut out_slice).and(&lhs).and(&rhs).for_each(
-                    |o, &a, &b| *o = $sub(a, b),
-                );
+                ndarray::Zip::from(&mut out_slice)
+                    .and(&lhs)
+                    .and(&rhs)
+                    .for_each(|o, &a, &b| *o = $sub(a, b));
             }
             ArraysD::$var(out)
         }};
@@ -718,7 +722,7 @@ pub fn diff_axis(
         ArraysD::C64(arr) => diff_per!(C64, arr, |a: C32, b: C32| a - b),
         ArraysD::C128(arr) => diff_per!(C128, arr, |a: C64, b: C64| a - b),
         ArraysD::Bool(_) => return Err(internal(vm, "diff: bool slipped past widening")),
-        _ => { return Err(crate::internal::unsupported_dtype(vm, "diff", a.dtype())) },
+        _ => return Err(crate::internal::unsupported_dtype(vm, "diff", a.dtype())),
     })
 }
 
@@ -745,7 +749,9 @@ pub fn diff(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         ArraysD::I16(x) => ArraysD::I16(diff_ints(&x)),
         ArraysD::I32(x) => ArraysD::I32(diff_ints(&x)),
         ArraysD::I64(x) => ArraysD::I64(diff_ints(&x)),
-        ArraysD::F16(x) => ArraysD::F16(diff_seq(&x, |a, b| f16::from_f32(f32::from(b) - f32::from(a)))),
+        ArraysD::F16(x) => ArraysD::F16(diff_seq(&x, |a, b| {
+            f16::from_f32(f32::from(b) - f32::from(a))
+        })),
         ArraysD::F32(x) => ArraysD::F32(diff_seq(&x, |a, b| b - a)),
         ArraysD::F64(x) => ArraysD::F64(diff_seq(&x, |a, b| b - a)),
         ArraysD::C64(x) => ArraysD::C64(diff_seq(&x, |a, b| b - a)),
@@ -754,17 +760,19 @@ pub fn diff(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     })
 }
 
-fn diff_ints<T: Copy + Default + std::ops::Sub<Output = T>>(
-    x: &ArrayD<T>,
-) -> ArrayD<T> {
+fn diff_ints<T: Copy + Default + std::ops::Sub<Output = T>>(x: &ArrayD<T>) -> ArrayD<T> {
     let n = x.len();
-    let data: Vec<T> = (1..n).map(|i| x[IxDyn(&[i])] - x[IxDyn(&[i - 1])]).collect();
+    let data: Vec<T> = (1..n)
+        .map(|i| x[IxDyn(&[i])] - x[IxDyn(&[i - 1])])
+        .collect();
     ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).unwrap_or_default()
 }
 
 fn diff_seq<T: Copy + Default, F: Fn(T, T) -> T>(x: &ArrayD<T>, f: F) -> ArrayD<T> {
     let n = x.len();
-    let data: Vec<T> = (1..n).map(|i| f(x[IxDyn(&[i - 1])], x[IxDyn(&[i])])).collect();
+    let data: Vec<T> = (1..n)
+        .map(|i| f(x[IxDyn(&[i - 1])], x[IxDyn(&[i])]))
+        .collect();
     ArrayD::from_shape_vec(IxDyn(&[data.len()]), data).unwrap_or_default()
 }
 
@@ -779,20 +787,30 @@ pub fn clip(a: &ArraysD, lo: Option<f64>, hi: Option<f64>) -> ArraysD {
     out.mapv_inplace(|v| {
         let mut v = v;
         if let Some(l) = lo
-            && v < l { v = l; }
+            && v < l
+        {
+            v = l;
+        }
         if let Some(h) = hi
-            && v > h { v = h; }
+            && v > h
+        {
+            v = h;
+        }
         v
     });
     ArraysD::F64(out).cast(a.dtype())
 }
 
 pub fn round_half_even(a: &ArraysD) -> ArraysD {
-    crate::ops::unary_real_or_complex(a, |x| {
-        // numpy round → banker's rounding
-        
-        x.round_ties_even()
-    }, |c| c)
+    crate::ops::unary_real_or_complex(
+        a,
+        |x| {
+            // numpy round → banker's rounding
+
+            x.round_ties_even()
+        },
+        |c| c,
+    )
 }
 
 pub fn trunc(a: &ArraysD) -> ArraysD {
@@ -815,17 +833,22 @@ pub fn where_op(
     let b = b.cast(out_dt);
     let s1 = broadcast(c.shape(), a.shape())
         .ok_or_else(|| vm.new_value_error("broadcast".to_string()))?;
-    let s = broadcast(&s1, b.shape())
-        .ok_or_else(|| vm.new_value_error("broadcast".to_string()))?;
+    let s = broadcast(&s1, b.shape()).ok_or_else(|| vm.new_value_error("broadcast".to_string()))?;
     let sd = IxDyn(&s);
-    let cv = c.broadcast(sd.clone()).or_internal(vm, "where: broadcast cond")?;
+    let cv = c
+        .broadcast(sd.clone())
+        .or_internal(vm, "where: broadcast cond")?;
     macro_rules! per {
         ($var:ident, $ty:ty) => {{
             let (ArraysD::$var(x), ArraysD::$var(y)) = (&a, &b) else {
                 return Err(internal(vm, "where: dtype mismatch after cast"));
             };
-            let xv = x.broadcast(sd.clone()).or_internal(vm, "where: broadcast a")?;
-            let yv = y.broadcast(sd.clone()).or_internal(vm, "where: broadcast b")?;
+            let xv = x
+                .broadcast(sd.clone())
+                .or_internal(vm, "where: broadcast a")?;
+            let yv = y
+                .broadcast(sd.clone())
+                .or_internal(vm, "where: broadcast b")?;
             let mut out = ArrayD::<$ty>::from_elem(sd.clone(), <$ty as Default>::default());
             Zip::from(&mut out)
                 .and(&cv)
@@ -851,12 +874,20 @@ pub fn where_op(
             let (ArraysD::F16(x), ArraysD::F16(y)) = (&a, &b) else {
                 return Err(internal(vm, "where: dtype mismatch after cast"));
             };
-            let xv = x.broadcast(sd.clone()).or_internal(vm, "where: broadcast a")?;
-            let yv = y.broadcast(sd.clone()).or_internal(vm, "where: broadcast b")?;
+            let xv = x
+                .broadcast(sd.clone())
+                .or_internal(vm, "where: broadcast a")?;
+            let yv = y
+                .broadcast(sd.clone())
+                .or_internal(vm, "where: broadcast b")?;
             let mut out = ArrayD::<f16>::from_elem(sd.clone(), f16::ZERO);
-            Zip::from(&mut out).and(&cv).and(&xv).and(&yv).for_each(|o, &cc, &xx, &yy| {
-                *o = if cc { xx } else { yy };
-            });
+            Zip::from(&mut out)
+                .and(&cv)
+                .and(&xv)
+                .and(&yv)
+                .for_each(|o, &cc, &xx, &yy| {
+                    *o = if cc { xx } else { yy };
+                });
             ArraysD::F16(out)
         }
         DType::F32 => per!(F32, f32),
@@ -865,27 +896,43 @@ pub fn where_op(
             let (ArraysD::C64(x), ArraysD::C64(y)) = (&a, &b) else {
                 return Err(internal(vm, "where: dtype mismatch after cast"));
             };
-            let xv = x.broadcast(sd.clone()).or_internal(vm, "where: broadcast a")?;
-            let yv = y.broadcast(sd.clone()).or_internal(vm, "where: broadcast b")?;
+            let xv = x
+                .broadcast(sd.clone())
+                .or_internal(vm, "where: broadcast a")?;
+            let yv = y
+                .broadcast(sd.clone())
+                .or_internal(vm, "where: broadcast b")?;
             let mut out = ArrayD::<C32>::from_elem(sd.clone(), C32::new(0.0, 0.0));
-            Zip::from(&mut out).and(&cv).and(&xv).and(&yv).for_each(|o, &cc, &xx, &yy| {
-                *o = if cc { xx } else { yy };
-            });
+            Zip::from(&mut out)
+                .and(&cv)
+                .and(&xv)
+                .and(&yv)
+                .for_each(|o, &cc, &xx, &yy| {
+                    *o = if cc { xx } else { yy };
+                });
             ArraysD::C64(out)
         }
         DType::C128 => {
             let (ArraysD::C128(x), ArraysD::C128(y)) = (&a, &b) else {
                 return Err(internal(vm, "where: dtype mismatch after cast"));
             };
-            let xv = x.broadcast(sd.clone()).or_internal(vm, "where: broadcast a")?;
-            let yv = y.broadcast(sd.clone()).or_internal(vm, "where: broadcast b")?;
+            let xv = x
+                .broadcast(sd.clone())
+                .or_internal(vm, "where: broadcast a")?;
+            let yv = y
+                .broadcast(sd.clone())
+                .or_internal(vm, "where: broadcast b")?;
             let mut out = ArrayD::<C64>::from_elem(sd.clone(), C64::new(0.0, 0.0));
-            Zip::from(&mut out).and(&cv).and(&xv).and(&yv).for_each(|o, &cc, &xx, &yy| {
-                *o = if cc { xx } else { yy };
-            });
+            Zip::from(&mut out)
+                .and(&cv)
+                .and(&xv)
+                .and(&yv)
+                .for_each(|o, &cc, &xx, &yy| {
+                    *o = if cc { xx } else { yy };
+                });
             ArraysD::C128(out)
         }
-        _ => { return Err(crate::internal::unsupported_dtype(vm, "where", out_dt)) },
+        _ => return Err(crate::internal::unsupported_dtype(vm, "where", out_dt)),
     })
 }
 
@@ -942,7 +989,10 @@ fn sort_flat(f: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         ArraysD::F16(x) => ArraysD::F16(sorted_float(x)),
         ArraysD::F32(x) => ArraysD::F32(sorted_float(x)),
         ArraysD::F64(x) => ArraysD::F64(sorted_float(x)),
-        ArraysD::Str { itemsize_chars, data } => {
+        ArraysD::Str {
+            itemsize_chars,
+            data,
+        } => {
             let mut v: Vec<String> = data.iter().cloned().collect();
             v.sort();
             ArraysD::Str {
@@ -1049,9 +1099,7 @@ fn argsort_flat(f: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let v: Vec<i64> = match f {
         ArraysD::Bool(x) => {
             let mut idx: Vec<i64> = (0..x.len() as i64).collect();
-            idx.sort_by(|&i, &j| {
-                x[IxDyn(&[i as usize])].cmp(&x[IxDyn(&[j as usize])])
-            });
+            idx.sort_by(|&i, &j| x[IxDyn(&[i as usize])].cmp(&x[IxDyn(&[j as usize])]));
             idx
         }
         ArraysD::I8(x) => order(x),
@@ -1067,16 +1115,12 @@ fn argsort_flat(f: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         ArraysD::F64(x) => order(x),
         ArraysD::Str { data, .. } => {
             let mut idx: Vec<i64> = (0..data.len() as i64).collect();
-            idx.sort_by(|&i, &j| {
-                data[IxDyn(&[i as usize])].cmp(&data[IxDyn(&[j as usize])])
-            });
+            idx.sort_by(|&i, &j| data[IxDyn(&[i as usize])].cmp(&data[IxDyn(&[j as usize])]));
             idx
         }
         ArraysD::Bytes { data, .. } => {
             let mut idx: Vec<i64> = (0..data.len() as i64).collect();
-            idx.sort_by(|&i, &j| {
-                data[IxDyn(&[i as usize])].cmp(&data[IxDyn(&[j as usize])])
-            });
+            idx.sort_by(|&i, &j| data[IxDyn(&[i as usize])].cmp(&data[IxDyn(&[j as usize])]));
             idx
         }
         _ => return Err(internal(vm, "argsort_flat: unexpected dtype")),
@@ -1178,7 +1222,10 @@ fn dedup_after_sort(arr: ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
         ArraysD::F16(x) => ArraysD::F16(dedup_float(x)),
         ArraysD::F32(x) => ArraysD::F32(dedup_float(x)),
         ArraysD::F64(x) => ArraysD::F64(dedup_float(x)),
-        ArraysD::Str { itemsize_chars, data } => {
+        ArraysD::Str {
+            itemsize_chars,
+            data,
+        } => {
             let mut v: Vec<String> = data.iter().cloned().collect();
             v.dedup();
             ArraysD::Str {
@@ -1303,7 +1350,13 @@ pub fn broadcast_to(a: &ArraysD, shape: &[usize], vm: &VirtualMachine) -> PyResu
         ArraysD::F64(x) => per!(F64, x),
         ArraysD::C64(x) => per!(C64, x),
         ArraysD::C128(x) => per!(C128, x),
-        _ => { return Err(crate::internal::unsupported_dtype(vm, "broadcast_to", a.dtype())) },
+        _ => {
+            return Err(crate::internal::unsupported_dtype(
+                vm,
+                "broadcast_to",
+                a.dtype(),
+            ));
+        }
     }
 }
 
@@ -1337,7 +1390,7 @@ pub fn repeat(a: &ArraysD, count: usize) -> ArraysD {
         ArraysD::F64(x) => per!(F64, f64, x),
         ArraysD::C64(x) => per!(C64, C32, x),
         ArraysD::C128(x) => per!(C128, C64, x),
-        _ => { a.clone() },
+        _ => a.clone(),
     }
 }
 
@@ -1370,7 +1423,7 @@ pub fn tile(a: &ArraysD, reps: usize) -> ArraysD {
         ArraysD::F64(x) => per!(F64, f64, x),
         ArraysD::C64(x) => per!(C64, C32, x),
         ArraysD::C128(x) => per!(C128, C64, x),
-        _ => { a.clone() },
+        _ => a.clone(),
     }
 }
 

@@ -31,7 +31,19 @@ pub type C64 = Complex<f64>;
 /// Datetime / timedelta unit code (numpy's [unit] suffix on `M8`/`m8`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimeUnit {
-    Y, M, W, D, H, Min, S, Ms, Us, Ns, Ps, Fs, As,
+    Y,
+    M,
+    W,
+    D,
+    H,
+    Min,
+    S,
+    Ms,
+    Us,
+    Ns,
+    Ps,
+    Fs,
+    As,
 }
 
 impl TimeUnit {
@@ -450,11 +462,26 @@ pub enum ArraysD {
     C64(ArrayD<C32>),
     C128(ArrayD<C64>),
     Object(ArrayD<PyObjectRef>),
-    Str { itemsize_chars: u32, data: ArrayD<String> },
-    Bytes { itemsize: u32, data: ArrayD<Vec<u8>> },
-    Datetime64 { unit: TimeUnit, data: ArrayD<i64> },
-    Timedelta64 { unit: TimeUnit, data: ArrayD<i64> },
-    Void { layout: Arc<StructLayout>, data: ArrayD<Vec<u8>> },
+    Str {
+        itemsize_chars: u32,
+        data: ArrayD<String>,
+    },
+    Bytes {
+        itemsize: u32,
+        data: ArrayD<Vec<u8>>,
+    },
+    Datetime64 {
+        unit: TimeUnit,
+        data: ArrayD<i64>,
+    },
+    Timedelta64 {
+        unit: TimeUnit,
+        data: ArrayD<i64>,
+    },
+    Void {
+        layout: Arc<StructLayout>,
+        data: ArrayD<Vec<u8>>,
+    },
 }
 
 impl ArraysD {
@@ -569,35 +596,119 @@ impl ArraysD {
 
     /// Per-dtype shortcut accessors — equivalent to `as_array::<T>()` but
     /// don't require a turbofish.
-    #[inline] pub fn as_bool(&self)  -> Option<&ArrayD<bool>> { self.as_array() }
-    #[inline] pub fn as_i8(&self)    -> Option<&ArrayD<i8>>   { self.as_array() }
-    #[inline] pub fn as_i16(&self)   -> Option<&ArrayD<i16>>  { self.as_array() }
-    #[inline] pub fn as_i32(&self)   -> Option<&ArrayD<i32>>  { self.as_array() }
-    #[inline] pub fn as_i64(&self)   -> Option<&ArrayD<i64>>  { self.as_array() }
-    #[inline] pub fn as_u8(&self)    -> Option<&ArrayD<u8>>   { self.as_array() }
-    #[inline] pub fn as_u16(&self)   -> Option<&ArrayD<u16>>  { self.as_array() }
-    #[inline] pub fn as_u32(&self)   -> Option<&ArrayD<u32>>  { self.as_array() }
-    #[inline] pub fn as_u64(&self)   -> Option<&ArrayD<u64>>  { self.as_array() }
-    #[inline] pub fn as_f16(&self)   -> Option<&ArrayD<f16>>  { self.as_array() }
-    #[inline] pub fn as_f32(&self)   -> Option<&ArrayD<f32>>  { self.as_array() }
-    #[inline] pub fn as_f64(&self)   -> Option<&ArrayD<f64>>  { self.as_array() }
-    #[inline] pub fn as_c64(&self)   -> Option<&ArrayD<C32>>  { self.as_array() }
-    #[inline] pub fn as_c128(&self)  -> Option<&ArrayD<C64>>  { self.as_array() }
+    #[inline]
+    pub fn as_bool(&self) -> Option<&ArrayD<bool>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_i8(&self) -> Option<&ArrayD<i8>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_i16(&self) -> Option<&ArrayD<i16>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_i32(&self) -> Option<&ArrayD<i32>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_i64(&self) -> Option<&ArrayD<i64>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_u8(&self) -> Option<&ArrayD<u8>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_u16(&self) -> Option<&ArrayD<u16>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_u32(&self) -> Option<&ArrayD<u32>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_u64(&self) -> Option<&ArrayD<u64>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_f16(&self) -> Option<&ArrayD<f16>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_f32(&self) -> Option<&ArrayD<f32>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_f64(&self) -> Option<&ArrayD<f64>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_c64(&self) -> Option<&ArrayD<C32>> {
+        self.as_array()
+    }
+    #[inline]
+    pub fn as_c128(&self) -> Option<&ArrayD<C64>> {
+        self.as_array()
+    }
 
-    #[inline] pub fn as_bool_mut(&mut self) -> Option<&mut ArrayD<bool>> { self.as_array_mut() }
-    #[inline] pub fn as_i8_mut(&mut self)   -> Option<&mut ArrayD<i8>>   { self.as_array_mut() }
-    #[inline] pub fn as_i16_mut(&mut self)  -> Option<&mut ArrayD<i16>>  { self.as_array_mut() }
-    #[inline] pub fn as_i32_mut(&mut self)  -> Option<&mut ArrayD<i32>>  { self.as_array_mut() }
-    #[inline] pub fn as_i64_mut(&mut self)  -> Option<&mut ArrayD<i64>>  { self.as_array_mut() }
-    #[inline] pub fn as_u8_mut(&mut self)   -> Option<&mut ArrayD<u8>>   { self.as_array_mut() }
-    #[inline] pub fn as_u16_mut(&mut self)  -> Option<&mut ArrayD<u16>>  { self.as_array_mut() }
-    #[inline] pub fn as_u32_mut(&mut self)  -> Option<&mut ArrayD<u32>>  { self.as_array_mut() }
-    #[inline] pub fn as_u64_mut(&mut self)  -> Option<&mut ArrayD<u64>>  { self.as_array_mut() }
-    #[inline] pub fn as_f16_mut(&mut self)  -> Option<&mut ArrayD<f16>>  { self.as_array_mut() }
-    #[inline] pub fn as_f32_mut(&mut self)  -> Option<&mut ArrayD<f32>>  { self.as_array_mut() }
-    #[inline] pub fn as_f64_mut(&mut self)  -> Option<&mut ArrayD<f64>>  { self.as_array_mut() }
-    #[inline] pub fn as_c64_mut(&mut self)  -> Option<&mut ArrayD<C32>>  { self.as_array_mut() }
-    #[inline] pub fn as_c128_mut(&mut self) -> Option<&mut ArrayD<C64>>  { self.as_array_mut() }
+    #[inline]
+    pub fn as_bool_mut(&mut self) -> Option<&mut ArrayD<bool>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_i8_mut(&mut self) -> Option<&mut ArrayD<i8>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_i16_mut(&mut self) -> Option<&mut ArrayD<i16>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_i32_mut(&mut self) -> Option<&mut ArrayD<i32>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_i64_mut(&mut self) -> Option<&mut ArrayD<i64>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_u8_mut(&mut self) -> Option<&mut ArrayD<u8>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_u16_mut(&mut self) -> Option<&mut ArrayD<u16>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_u32_mut(&mut self) -> Option<&mut ArrayD<u32>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_u64_mut(&mut self) -> Option<&mut ArrayD<u64>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_f16_mut(&mut self) -> Option<&mut ArrayD<f16>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_f32_mut(&mut self) -> Option<&mut ArrayD<f32>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_f64_mut(&mut self) -> Option<&mut ArrayD<f64>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_c64_mut(&mut self) -> Option<&mut ArrayD<C32>> {
+        self.as_array_mut()
+    }
+    #[inline]
+    pub fn as_c128_mut(&mut self) -> Option<&mut ArrayD<C64>> {
+        self.as_array_mut()
+    }
 }
 
 // =====================================================================
@@ -765,7 +876,11 @@ impl CoerceArray for ArraysD {
 
     #[inline]
     fn into_coerced<T: ArrayElement>(self) -> ArrayD<T> {
-        let cast = if self.dtype() == T::DTYPE { self } else { self.cast(T::DTYPE) };
+        let cast = if self.dtype() == T::DTYPE {
+            self
+        } else {
+            self.cast(T::DTYPE)
+        };
         T::into_array(cast).unwrap_or_else(|_| empty_array_d::<T>())
     }
 }
@@ -788,20 +903,48 @@ fn cast_impl(src: &ArraysD, tgt: DType) -> ArraysD {
         return cast_nonnumeric(src, tgt);
     }
     match tgt {
-        DType::Bool => ArraysD::Bool(dispatch_numeric!(src, |a| a.mapv(to_bool), _ => ArrayD::from_elem(src.raw_dim(), false))),
-        DType::I8 => ArraysD::I8(dispatch_numeric!(src, |a| a.mapv(cast_to_i8), _ => ArrayD::from_elem(src.raw_dim(), 0i8))),
-        DType::I16 => ArraysD::I16(dispatch_numeric!(src, |a| a.mapv(cast_to_i16), _ => ArrayD::from_elem(src.raw_dim(), 0i16))),
-        DType::I32 => ArraysD::I32(dispatch_numeric!(src, |a| a.mapv(cast_to_i32), _ => ArrayD::from_elem(src.raw_dim(), 0i32))),
-        DType::I64 => ArraysD::I64(dispatch_numeric!(src, |a| a.mapv(cast_to_i64), _ => ArrayD::from_elem(src.raw_dim(), 0i64))),
-        DType::U8 => ArraysD::U8(dispatch_numeric!(src, |a| a.mapv(cast_to_u8), _ => ArrayD::from_elem(src.raw_dim(), 0u8))),
-        DType::U16 => ArraysD::U16(dispatch_numeric!(src, |a| a.mapv(cast_to_u16), _ => ArrayD::from_elem(src.raw_dim(), 0u16))),
-        DType::U32 => ArraysD::U32(dispatch_numeric!(src, |a| a.mapv(cast_to_u32), _ => ArrayD::from_elem(src.raw_dim(), 0u32))),
-        DType::U64 => ArraysD::U64(dispatch_numeric!(src, |a| a.mapv(cast_to_u64), _ => ArrayD::from_elem(src.raw_dim(), 0u64))),
-        DType::F16 => ArraysD::F16(dispatch_numeric!(src, |a| a.mapv(cast_to_f16), _ => ArrayD::from_elem(src.raw_dim(), f16::from_f32(0.0)))),
-        DType::F32 => ArraysD::F32(dispatch_numeric!(src, |a| a.mapv(cast_to_f32), _ => ArrayD::from_elem(src.raw_dim(), 0f32))),
-        DType::F64 => ArraysD::F64(dispatch_numeric!(src, |a| a.mapv(cast_to_f64), _ => ArrayD::from_elem(src.raw_dim(), 0f64))),
-        DType::C64 => ArraysD::C64(dispatch_numeric!(src, |a| a.mapv(cast_to_c32), _ => ArrayD::from_elem(src.raw_dim(), C32::new(0.0, 0.0)))),
-        DType::C128 => ArraysD::C128(dispatch_numeric!(src, |a| a.mapv(cast_to_c64), _ => ArrayD::from_elem(src.raw_dim(), C64::new(0.0, 0.0)))),
+        DType::Bool => ArraysD::Bool(
+            dispatch_numeric!(src, |a| a.mapv(to_bool), _ => ArrayD::from_elem(src.raw_dim(), false)),
+        ),
+        DType::I8 => ArraysD::I8(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_i8), _ => ArrayD::from_elem(src.raw_dim(), 0i8)),
+        ),
+        DType::I16 => ArraysD::I16(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_i16), _ => ArrayD::from_elem(src.raw_dim(), 0i16)),
+        ),
+        DType::I32 => ArraysD::I32(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_i32), _ => ArrayD::from_elem(src.raw_dim(), 0i32)),
+        ),
+        DType::I64 => ArraysD::I64(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_i64), _ => ArrayD::from_elem(src.raw_dim(), 0i64)),
+        ),
+        DType::U8 => ArraysD::U8(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_u8), _ => ArrayD::from_elem(src.raw_dim(), 0u8)),
+        ),
+        DType::U16 => ArraysD::U16(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_u16), _ => ArrayD::from_elem(src.raw_dim(), 0u16)),
+        ),
+        DType::U32 => ArraysD::U32(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_u32), _ => ArrayD::from_elem(src.raw_dim(), 0u32)),
+        ),
+        DType::U64 => ArraysD::U64(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_u64), _ => ArrayD::from_elem(src.raw_dim(), 0u64)),
+        ),
+        DType::F16 => ArraysD::F16(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_f16), _ => ArrayD::from_elem(src.raw_dim(), f16::from_f32(0.0))),
+        ),
+        DType::F32 => ArraysD::F32(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_f32), _ => ArrayD::from_elem(src.raw_dim(), 0f32)),
+        ),
+        DType::F64 => ArraysD::F64(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_f64), _ => ArrayD::from_elem(src.raw_dim(), 0f64)),
+        ),
+        DType::C64 => ArraysD::C64(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_c32), _ => ArrayD::from_elem(src.raw_dim(), C32::new(0.0, 0.0))),
+        ),
+        DType::C128 => ArraysD::C128(
+            dispatch_numeric!(src, |a| a.mapv(cast_to_c64), _ => ArrayD::from_elem(src.raw_dim(), C64::new(0.0, 0.0))),
+        ),
         // The is_numeric() short-circuit ensures we never reach here for
         // non-numeric targets, but the match must be exhaustive.
         DType::Object
@@ -841,23 +984,27 @@ fn cast_nonnumeric(src: &ArraysD, tgt: DType) -> ArraysD {
         // Return an empty array of the target dtype as a stand-in.
         (ArraysD::Object(_), _) => empty_for(tgt),
         // Datetime64 → Timedelta64 (and reverse) at same unit: zero-copy.
-        (
-            ArraysD::Datetime64 { unit, data },
-            DType::Timedelta64(target_unit),
-        ) if *unit == target_unit => ArraysD::Timedelta64 {
-            unit: *unit,
-            data: data.clone(),
-        },
-        (
-            ArraysD::Timedelta64 { unit, data },
-            DType::Datetime64(target_unit),
-        ) if *unit == target_unit => ArraysD::Datetime64 {
-            unit: *unit,
-            data: data.clone(),
-        },
+        (ArraysD::Datetime64 { unit, data }, DType::Timedelta64(target_unit))
+            if *unit == target_unit =>
+        {
+            ArraysD::Timedelta64 {
+                unit: *unit,
+                data: data.clone(),
+            }
+        }
+        (ArraysD::Timedelta64 { unit, data }, DType::Datetime64(target_unit))
+            if *unit == target_unit =>
+        {
+            ArraysD::Datetime64 {
+                unit: *unit,
+                data: data.clone(),
+            }
+        }
         // Datetime/Timedelta → integer numeric: hand back the underlying i64
         // counter cast to the target.
-        (ArraysD::Datetime64 { data, .. }, t) | (ArraysD::Timedelta64 { data, .. }, t) if t.is_numeric() => {
+        (ArraysD::Datetime64 { data, .. }, t) | (ArraysD::Timedelta64 { data, .. }, t)
+            if t.is_numeric() =>
+        {
             ArraysD::I64(data.clone()).cast(t)
         }
         // Same-kind string width adjustment: preserve data, only the
@@ -903,8 +1050,14 @@ fn empty_for(t: DType) -> ArraysD {
             itemsize: n,
             data: crate::internal::empty_array(),
         },
-        DType::Datetime64(u) => ArraysD::Datetime64 { unit: u, data: ArrayD::from_elem(zero, 0) },
-        DType::Timedelta64(u) => ArraysD::Timedelta64 { unit: u, data: ArrayD::from_elem(zero, 0) },
+        DType::Datetime64(u) => ArraysD::Datetime64 {
+            unit: u,
+            data: ArrayD::from_elem(zero, 0),
+        },
+        DType::Timedelta64(u) => ArraysD::Timedelta64 {
+            unit: u,
+            data: ArrayD::from_elem(zero, 0),
+        },
         DType::Void(n) => ArraysD::Void {
             layout: Arc::new(StructLayout::new(Vec::new(), n as usize)),
             data: crate::internal::empty_array(),

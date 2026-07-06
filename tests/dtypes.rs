@@ -119,7 +119,11 @@ fn run_numpy(source: &str) -> ResultPair {
         let numpy = PyModule::import(py, "numpy")?;
         globals.set_item("numpy", &numpy)?;
         globals.set_item("np", &numpy)?;
-        py.run(&std::ffi::CString::new(source).unwrap(), Some(&globals), None)?;
+        py.run(
+            &std::ffi::CString::new(source).unwrap(),
+            Some(&globals),
+            None,
+        )?;
         let result = globals.get_item("result")?.unwrap();
         let dtype = globals
             .get_item("result_dtype")?
@@ -133,11 +137,7 @@ fn run_numpy(source: &str) -> ResultPair {
             .iter()
             .map(|x| x.extract::<f64>())
             .collect::<PyResult<_>>()?;
-        Ok(ResultPair {
-            dtype,
-            shape,
-            data,
-        })
+        Ok(ResultPair { dtype, shape, data })
     })
     .expect("numpy snippet failed")
 }
@@ -829,7 +829,9 @@ result_dtype = str(b.dtype)
 
 #[test]
 fn add_preserves_dtype_each_int() {
-    for dt in ["int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"] {
+    for dt in [
+        "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
+    ] {
         let snippet = format!(
             r#"
 import numpy as np
@@ -896,10 +898,20 @@ result_dtype = str(c.dtype)
 #[test]
 fn astype_to_each_dtype() {
     for dt in [
-        "bool", "int8", "int16", "int32", "int64",
-        "uint8", "uint16", "uint32", "uint64",
-        "float16", "float32", "float64",
-        "complex64", "complex128",
+        "bool",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "float16",
+        "float32",
+        "float64",
+        "complex64",
+        "complex128",
     ] {
         let snippet = format!(
             r#"

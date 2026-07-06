@@ -70,8 +70,13 @@ def assert_array_equal(actual, desired, err_msg="", verbose=True):
 
 
 def assert_allclose(
-    actual, desired, rtol=1e-7, atol=0.0, equal_nan=True,
-    err_msg="", verbose=True,
+    actual,
+    desired,
+    rtol=1e-7,
+    atol=0.0,
+    equal_nan=True,
+    err_msg="",
+    verbose=True,
 ):
     """All elements close in absolute and relative tolerance."""
     a = list(_flatten(actual))
@@ -97,25 +102,32 @@ def assert_allclose(
 
 def assert_array_almost_equal(actual, desired, decimal=6, err_msg="", verbose=True):
     """Closeness up to ``decimal`` decimal places."""
-    tol = 1.5 * (10 ** -decimal)
+    tol = 1.5 * (10**-decimal)
     assert_allclose(
-        actual, desired, rtol=0.0, atol=tol,
-        err_msg=err_msg, verbose=verbose,
+        actual,
+        desired,
+        rtol=0.0,
+        atol=tol,
+        err_msg=err_msg,
+        verbose=verbose,
     )
 
 
 def assert_almost_equal(actual, desired, decimal=7, err_msg="", verbose=True):
     """Scalar/array closeness up to ``decimal`` decimal places."""
     assert_array_almost_equal(
-        actual, desired, decimal=decimal,
-        err_msg=err_msg, verbose=verbose,
+        actual,
+        desired,
+        decimal=decimal,
+        err_msg=err_msg,
+        verbose=verbose,
     )
 
 
 def assert_approx_equal(actual, desired, significant=7, err_msg=""):
     """Two scalars agree to ``significant`` significant digits."""
     if desired == 0.0:
-        tol = 10 ** -significant
+        tol = 10**-significant
     else:
         tol = abs(desired) * 10 ** (-significant + 1)
     if abs(actual - desired) > tol:
@@ -141,9 +153,7 @@ def assert_raises(exc_type, callable_, *args, **kwargs):
         callable_(*args, **kwargs)
     except exc_type:
         return
-    raise AssertionError(
-        f"expected {exc_type.__name__}, no exception raised"
-    )
+    raise AssertionError(f"expected {exc_type.__name__}, no exception raised")
 
 
 def assert_warns(*args, **kwargs):
@@ -166,17 +176,20 @@ def assert_warns(*args, **kwargs):
 
 try:
     import sys as _sys
-    IS_64BIT = _sys.maxsize > 2 ** 32
+
+    IS_64BIT = _sys.maxsize > 2**32
 except ImportError:
     IS_64BIT = True
 
 try:
     import platform as _platform
+
     IS_PYPY = _platform.python_implementation() == "PyPy"
     IS_WASM = _platform.machine().lower().startswith("wasm")
     IS_MUSL = (
         "musl" in _platform.libc_ver()[0].lower()
-        if hasattr(_platform, "libc_ver") else False
+        if hasattr(_platform, "libc_ver")
+        else False
     )
 except ImportError:
     IS_PYPY = False
@@ -197,6 +210,7 @@ verbose = 0
 
 # ---- Exceptions and warning subclasses re-exported by numpy.testing ----
 
+
 class IgnoreException(Exception):
     """Used to flag a test as intentionally skipped."""
 
@@ -210,6 +224,7 @@ class SkipTest(Exception):
 
 
 # ---- Mini-unittest compatibility ----
+
 
 class TestCase:
     """Minimal stand-in for ``unittest.TestCase``.
@@ -241,14 +256,16 @@ class TestCase:
 
 # ---- Extra assertion helpers ----
 
+
 def assert_(condition, msg=""):
     """Raise ``AssertionError(msg)`` if ``condition`` is falsy."""
     if not condition:
         raise AssertionError(msg or "assertion failed")
 
 
-def assert_array_compare(comparison, x, y, err_msg="", verbose=True,
-                         header="", strict=False, equal_nan=True):
+def assert_array_compare(
+    comparison, x, y, err_msg="", verbose=True, header="", strict=False, equal_nan=True
+):
     """Element-wise comparison via ``comparison(x, y)`` for every pair."""
     _ = (verbose, header, strict, equal_nan)
     a = list(_flatten(x))
@@ -263,6 +280,7 @@ def assert_array_compare(comparison, x, y, err_msg="", verbose=True,
 def assert_array_almost_equal_nulp(actual, desired, nulp=1):
     """Closeness measured in units in the last place (ULPs)."""
     import math
+
     a = list(_flatten(actual))
     d = list(_flatten(desired))
     for i, (x, y) in enumerate(zip(a, d)):
@@ -293,6 +311,7 @@ def assert_no_warnings(*args, **kwargs):
 
 def assert_raises_regex(exc_type, regex, callable_, *args, **kwargs):
     import re
+
     try:
         callable_(*args, **kwargs)
     except exc_type as e:
@@ -306,7 +325,9 @@ def assert_raises_regex(exc_type, regex, callable_, *args, **kwargs):
 
 def assert_string_equal(actual, desired):
     if actual != desired:
-        raise AssertionError(f"strings differ:\n  actual:  {actual!r}\n  desired: {desired!r}")
+        raise AssertionError(
+            f"strings differ:\n  actual:  {actual!r}\n  desired: {desired!r}"
+        )
 
 
 def break_cycles():
@@ -314,8 +335,14 @@ def break_cycles():
     pass
 
 
-def build_err_msg(arrays, err_msg, header="Arrays are not equal",
-                  verbose=True, names=("ACTUAL", "DESIRED"), precision=8):
+def build_err_msg(
+    arrays,
+    err_msg,
+    header="Arrays are not equal",
+    verbose=True,
+    names=("ACTUAL", "DESIRED"),
+    precision=8,
+):
     _ = (verbose, precision)
     parts = [header]
     if err_msg:
@@ -363,6 +390,7 @@ def measure(code_str, times=1, label=""):
     """Time ``times`` runs of ``code_str``; returns total seconds."""
     _ = label
     import time
+
     start = time.time()
     for _ in range(times):
         exec(code_str)
@@ -389,9 +417,12 @@ def print_assert_equal(test_string, actual, desired):
 def run_threaded(func, n_threads=2, args=(), kwargs=None):
     """Run ``func`` from ``n_threads`` threads concurrently."""
     import threading
+
     kwargs = kwargs or {}
-    threads = [threading.Thread(target=func, args=args, kwargs=kwargs)
-               for _ in range(n_threads)]
+    threads = [
+        threading.Thread(target=func, args=args, kwargs=kwargs)
+        for _ in range(n_threads)
+    ]
     for t in threads:
         t.start()
     for t in threads:
@@ -430,12 +461,14 @@ class suppress_warnings:
 def tempdir(*args, **kwargs):
     """Return a context manager yielding a fresh temporary directory."""
     import tempfile
+
     return tempfile.TemporaryDirectory(*args, **kwargs)
 
 
 def temppath(*args, **kwargs):
     """Return a context manager yielding a fresh temporary file path."""
     import tempfile
+
     return tempfile.NamedTemporaryFile(*args, **kwargs)
 
 

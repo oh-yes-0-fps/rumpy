@@ -72,9 +72,7 @@ class record:
         return NotImplemented
 
     def __repr__(self):
-        body = ", ".join(
-            f"{n}={v!r}" for n, v in zip(self._names, self._values)
-        )
+        body = ", ".join(f"{n}={v!r}" for n, v in zip(self._names, self._values))
         return f"record({body})"
 
     @property
@@ -168,9 +166,7 @@ def fromarrays(array_list, names):
     """Construct a recarray from a list of equal-length per-column arrays."""
     names = _parse_names(names)
     if len(array_list) != len(names):
-        raise ValueError(
-            "fromarrays: len(array_list) != len(names)"
-        )
+        raise ValueError("fromarrays: len(array_list) != len(names)")
     cols = [list(a) for a in array_list]
     if cols and any(len(c) != len(cols[0]) for c in cols):
         raise ValueError("fromarrays: column lengths differ")
@@ -283,7 +279,7 @@ def _decode_float(buf, big_endian):
     if exp == 0:
         value = mant * (2.0 ** (1 - bias - mant_bits))
     else:
-        value = (1.0 + mant * (2.0 ** -mant_bits)) * (2.0 ** (exp - bias))
+        value = (1.0 + mant * (2.0**-mant_bits)) * (2.0 ** (exp - bias))
     return -value if sign else value
 
 
@@ -294,11 +290,13 @@ def _unpack_record(raw, parsed, big_endian):
         chunk = raw[pos : pos + size]
         pos += size
         if kind == "int":
-            values.append(int.from_bytes(
-                chunk,
-                "big" if big_endian else "little",
-                signed=signed,
-            ))
+            values.append(
+                int.from_bytes(
+                    chunk,
+                    "big" if big_endian else "little",
+                    signed=signed,
+                )
+            )
         elif kind == "float":
             values.append(_decode_float(chunk, big_endian))
         else:
@@ -306,9 +304,17 @@ def _unpack_record(raw, parsed, big_endian):
     return tuple(values)
 
 
-def fromstring(datastring, dtype=None, shape=None, offset=0,
-               formats=None, names=None, titles=None, aligned=False,
-               byteorder=None):
+def fromstring(
+    datastring,
+    dtype=None,
+    shape=None,
+    offset=0,
+    formats=None,
+    names=None,
+    titles=None,
+    aligned=False,
+    byteorder=None,
+):
     """Parse a typed binary buffer into a :class:`recarray`.
 
     Only the ``formats``/``names`` route is supported (rumpy's rec is not
@@ -353,18 +359,34 @@ def fromstring(datastring, dtype=None, shape=None, offset=0,
     return fromrecords(rows, name_list)
 
 
-def fromfile(fd, dtype=None, shape=None, offset=0,
-             formats=None, names=None, titles=None, aligned=False,
-             byteorder=None):
+def fromfile(
+    fd,
+    dtype=None,
+    shape=None,
+    offset=0,
+    formats=None,
+    names=None,
+    titles=None,
+    aligned=False,
+    byteorder=None,
+):
     """Read records from a file-like / path source. See :func:`fromstring`."""
     if hasattr(fd, "read"):
         data = fd.read()
     else:
         with open(fd, "rb") as fh:
             data = fh.read()
-    return fromstring(data, dtype=dtype, shape=shape, offset=offset,
-                      formats=formats, names=names, titles=titles,
-                      aligned=aligned, byteorder=byteorder)
+    return fromstring(
+        data,
+        dtype=dtype,
+        shape=shape,
+        offset=offset,
+        formats=formats,
+        names=names,
+        titles=titles,
+        aligned=aligned,
+        byteorder=byteorder,
+    )
 
 
 __all__ = [

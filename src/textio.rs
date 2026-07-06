@@ -28,10 +28,12 @@ pub fn savetxt(
     // Numpy supports 1-D (one row, "fmt" per value) or 2-D (rows × cols).
     let f = match a.cast(DType::F64) {
         ArraysD::F64(x) => x,
-        _ => return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "savetxt: cast to F64 failed",
-        )),
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "savetxt: cast to F64 failed",
+            ));
+        }
     };
     match f.ndim() {
         0 => {
@@ -47,8 +49,7 @@ pub fn savetxt(
             let m = f.shape()[0];
             let n = f.shape()[1];
             for i in 0..m {
-                let row: Vec<String> =
-                    (0..n).map(|j| fmt_value(f[IxDyn(&[i, j])], fmt)).collect();
+                let row: Vec<String> = (0..n).map(|j| fmt_value(f[IxDyn(&[i, j])], fmt)).collect();
                 writeln!(w, "{}", row.join(delimiter))?;
             }
         }
@@ -77,7 +78,9 @@ fn fmt_value(v: f64, fmt: &str) -> String {
     // Pull the precision if it's `.<n>`.
     let mut prec: Option<usize> = None;
     let body = if let Some(rest) = body.strip_prefix('.') {
-        let dig_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        let dig_end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
         prec = rest[..dig_end].parse().ok();
         &rest[dig_end..]
     } else {
@@ -253,7 +256,12 @@ fn write_raw<W: Write>(w: &mut W, a: &ArraysD) -> std::io::Result<()> {
                 w.write_all(&v.im.to_le_bytes())?;
             }
         }
-        _ => { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "non-numeric dtype not supported by write_raw")) },
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "non-numeric dtype not supported by write_raw",
+            ));
+        }
     }
     Ok(())
 }
@@ -261,11 +269,7 @@ fn write_raw<W: Write>(w: &mut W, a: &ArraysD) -> std::io::Result<()> {
 /// `np.fromfile(path, dtype=...)` — raw little-endian, no header. Always
 /// returns a 1-D array of `count` elements (or the entire file if `count`
 /// is `-1`).
-pub fn fromfile(
-    path: &Path,
-    dtype: DType,
-    count: isize,
-) -> std::io::Result<ArraysD> {
+pub fn fromfile(path: &Path, dtype: DType, count: isize) -> std::io::Result<ArraysD> {
     let mut f = File::open(path)?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;
@@ -298,19 +302,33 @@ fn read_raw(buf: &[u8], dtype: DType, count: isize) -> std::io::Result<ArraysD> 
         DType::Bool => ArraysD::Bool(
             ArrayD::from_shape_vec(
                 IxDyn(&[n]),
-                buf.get(..n).unwrap_or(&[]).iter().map(|&b| b != 0).collect::<Vec<_>>(),
+                buf.get(..n)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|&b| b != 0)
+                    .collect::<Vec<_>>(),
             )
             .unwrap_or_default(),
         ),
         DType::I8 => {
-            let v: Vec<i8> = buf.get(..n).unwrap_or(&[]).iter().map(|&b| b as i8).collect();
+            let v: Vec<i8> = buf
+                .get(..n)
+                .unwrap_or(&[])
+                .iter()
+                .map(|&b| b as i8)
+                .collect();
             ArraysD::I8(ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default())
         }
         DType::U8 => ArraysD::U8(
-            ArrayD::from_shape_vec(IxDyn(&[n]), buf.get(..n).unwrap_or(&[]).to_vec()).unwrap_or_default(),
+            ArrayD::from_shape_vec(IxDyn(&[n]), buf.get(..n).unwrap_or(&[]).to_vec())
+                .unwrap_or_default(),
         ),
-        DType::I16 => ArraysD::I16(ArrayD::from_shape_vec(IxDyn(&[n]), le!(i16, 2)).unwrap_or_default()),
-        DType::U16 => ArraysD::U16(ArrayD::from_shape_vec(IxDyn(&[n]), le!(u16, 2)).unwrap_or_default()),
+        DType::I16 => {
+            ArraysD::I16(ArrayD::from_shape_vec(IxDyn(&[n]), le!(i16, 2)).unwrap_or_default())
+        }
+        DType::U16 => {
+            ArraysD::U16(ArrayD::from_shape_vec(IxDyn(&[n]), le!(u16, 2)).unwrap_or_default())
+        }
         DType::F16 => {
             let mut v = Vec::<half::f16>::with_capacity(n);
             for i in 0..n {
@@ -323,19 +341,40 @@ fn read_raw(buf: &[u8], dtype: DType, count: isize) -> std::io::Result<ArraysD> 
             }
             ArraysD::F16(ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default())
         }
-        DType::I32 => ArraysD::I32(ArrayD::from_shape_vec(IxDyn(&[n]), le!(i32, 4)).unwrap_or_default()),
-        DType::U32 => ArraysD::U32(ArrayD::from_shape_vec(IxDyn(&[n]), le!(u32, 4)).unwrap_or_default()),
-        DType::F32 => ArraysD::F32(ArrayD::from_shape_vec(IxDyn(&[n]), le!(f32, 4)).unwrap_or_default()),
-        DType::I64 => ArraysD::I64(ArrayD::from_shape_vec(IxDyn(&[n]), le!(i64, 8)).unwrap_or_default()),
-        DType::U64 => ArraysD::U64(ArrayD::from_shape_vec(IxDyn(&[n]), le!(u64, 8)).unwrap_or_default()),
-        DType::F64 => ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[n]), le!(f64, 8)).unwrap_or_default()),
+        DType::I32 => {
+            ArraysD::I32(ArrayD::from_shape_vec(IxDyn(&[n]), le!(i32, 4)).unwrap_or_default())
+        }
+        DType::U32 => {
+            ArraysD::U32(ArrayD::from_shape_vec(IxDyn(&[n]), le!(u32, 4)).unwrap_or_default())
+        }
+        DType::F32 => {
+            ArraysD::F32(ArrayD::from_shape_vec(IxDyn(&[n]), le!(f32, 4)).unwrap_or_default())
+        }
+        DType::I64 => {
+            ArraysD::I64(ArrayD::from_shape_vec(IxDyn(&[n]), le!(i64, 8)).unwrap_or_default())
+        }
+        DType::U64 => {
+            ArraysD::U64(ArrayD::from_shape_vec(IxDyn(&[n]), le!(u64, 8)).unwrap_or_default())
+        }
+        DType::F64 => {
+            ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[n]), le!(f64, 8)).unwrap_or_default())
+        }
         DType::C64 => {
             let mut v = Vec::with_capacity(n);
             for i in 0..n {
                 let s = i * 8;
-                let re_b: [u8; 4] = buf.get(s..s + 4).and_then(|sl| sl.try_into().ok()).unwrap_or([0; 4]);
-                let im_b: [u8; 4] = buf.get(s + 4..s + 8).and_then(|sl| sl.try_into().ok()).unwrap_or([0; 4]);
-                v.push(crate::dtype::C32::new(f32::from_le_bytes(re_b), f32::from_le_bytes(im_b)));
+                let re_b: [u8; 4] = buf
+                    .get(s..s + 4)
+                    .and_then(|sl| sl.try_into().ok())
+                    .unwrap_or([0; 4]);
+                let im_b: [u8; 4] = buf
+                    .get(s + 4..s + 8)
+                    .and_then(|sl| sl.try_into().ok())
+                    .unwrap_or([0; 4]);
+                v.push(crate::dtype::C32::new(
+                    f32::from_le_bytes(re_b),
+                    f32::from_le_bytes(im_b),
+                ));
             }
             ArraysD::C64(ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default())
         }
@@ -343,12 +382,26 @@ fn read_raw(buf: &[u8], dtype: DType, count: isize) -> std::io::Result<ArraysD> 
             let mut v = Vec::with_capacity(n);
             for i in 0..n {
                 let s = i * 16;
-                let re_b: [u8; 8] = buf.get(s..s + 8).and_then(|sl| sl.try_into().ok()).unwrap_or([0; 8]);
-                let im_b: [u8; 8] = buf.get(s + 8..s + 16).and_then(|sl| sl.try_into().ok()).unwrap_or([0; 8]);
-                v.push(crate::dtype::C64::new(f64::from_le_bytes(re_b), f64::from_le_bytes(im_b)));
+                let re_b: [u8; 8] = buf
+                    .get(s..s + 8)
+                    .and_then(|sl| sl.try_into().ok())
+                    .unwrap_or([0; 8]);
+                let im_b: [u8; 8] = buf
+                    .get(s + 8..s + 16)
+                    .and_then(|sl| sl.try_into().ok())
+                    .unwrap_or([0; 8]);
+                v.push(crate::dtype::C64::new(
+                    f64::from_le_bytes(re_b),
+                    f64::from_le_bytes(im_b),
+                ));
             }
             ArraysD::C128(ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default())
         }
-        _ => { return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "non-numeric dtype not supported by read_raw")) },
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "non-numeric dtype not supported by read_raw",
+            ));
+        }
     })
 }

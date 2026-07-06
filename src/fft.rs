@@ -64,10 +64,8 @@ pub fn rfft(a: &ArraysD, n: Option<usize>, vm: &VirtualMachine) -> PyResult<Arra
         _ => return Err(crate::internal::internal(vm, "rfft: cast to F64 failed")),
     };
     let target = n.unwrap_or(real.len());
-    let mut buf: Vec<C64> = pad_or_truncate(
-        real.iter().map(|&v| C64::new(v, 0.0)).collect(),
-        target,
-    );
+    let mut buf: Vec<C64> =
+        pad_or_truncate(real.iter().map(|&v| C64::new(v, 0.0)).collect(), target);
     let mut planner = FftPlanner::<f64>::new();
     let plan = planner.plan_fft_forward(buf.len());
     plan.process(&mut buf);
@@ -185,20 +183,12 @@ pub fn rfftfreq(n: usize, d: f64) -> ArraysD {
 
 /// `np.fft.fftshift(a, axes=None)` — shift the zero-frequency component to
 /// the centre along the given axes (all axes by default).
-pub fn fftshift(
-    a: &ArraysD,
-    axes: Option<Vec<isize>>,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn fftshift(a: &ArraysD, axes: Option<Vec<isize>>, vm: &VirtualMachine) -> PyResult<ArraysD> {
     shift_along(a, axes, true, vm)
 }
 
 /// `np.fft.ifftshift(a, axes=None)` — inverse of `fftshift`.
-pub fn ifftshift(
-    a: &ArraysD,
-    axes: Option<Vec<isize>>,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn ifftshift(a: &ArraysD, axes: Option<Vec<isize>>, vm: &VirtualMachine) -> PyResult<ArraysD> {
     shift_along(a, axes, false, vm)
 }
 
@@ -240,12 +230,7 @@ fn shift_along(
     Ok(out)
 }
 
-fn roll_axis(
-    a: &ArraysD,
-    shift: isize,
-    axis: usize,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+fn roll_axis(a: &ArraysD, shift: isize, axis: usize, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let n = a.shape()[axis] as isize;
     if n == 0 {
         return Ok(a.clone());
@@ -284,11 +269,8 @@ fn roll_axis(
         ($var:ident, $arr:ident) => {{
             let part_a = $arr.slice(si_a.as_ref()).to_owned();
             let part_b = $arr.slice(si_b.as_ref()).to_owned();
-            let cat = ndarray::concatenate(
-                ndarray::Axis(axis),
-                &[part_a.view(), part_b.view()],
-            )
-            .map_err(|e| vm.new_value_error(e.to_string()))?;
+            let cat = ndarray::concatenate(ndarray::Axis(axis), &[part_a.view(), part_b.view()])
+                .map_err(|e| vm.new_value_error(e.to_string()))?;
             Ok(ArraysD::$var(cat))
         }};
     }
@@ -326,20 +308,12 @@ fn pad_or_truncate(mut v: Vec<C64>, n: usize) -> Vec<C64> {
 
 /// `np.fft.fftn(a)` — N-dimensional FFT. Performs an FFT along every axis in
 /// turn. If `axes` is provided, only those axes are transformed.
-pub fn fftn(
-    a: &ArraysD,
-    axes: Option<Vec<isize>>,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn fftn(a: &ArraysD, axes: Option<Vec<isize>>, vm: &VirtualMachine) -> PyResult<ArraysD> {
     do_fftn(a, axes, /*inverse=*/ false, vm)
 }
 
 /// `np.fft.ifftn(a)` — inverse N-dimensional FFT.
-pub fn ifftn(
-    a: &ArraysD,
-    axes: Option<Vec<isize>>,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn ifftn(a: &ArraysD, axes: Option<Vec<isize>>, vm: &VirtualMachine) -> PyResult<ArraysD> {
     do_fftn(a, axes, /*inverse=*/ true, vm)
 }
 
@@ -360,9 +334,7 @@ fn do_fftn(
             .map(|ax| {
                 let n = if ax < 0 { ax + nd as isize } else { ax };
                 if n < 0 || n >= nd as isize {
-                    Err(vm.new_value_error(format!(
-                        "fftn: axis {ax} out of range for {nd}-D"
-                    )))
+                    Err(vm.new_value_error(format!("fftn: axis {ax} out of range for {nd}-D")))
                 } else {
                     Ok(n as usize)
                 }

@@ -82,38 +82,50 @@ def replace(x, old, new, count=-1):
 
 
 def startswith(x, prefix, start=0, end=None):
-    return [a.startswith(prefix, start, end) if end is not None
-            else a.startswith(prefix, start) for a in x]
+    return [
+        a.startswith(prefix, start, end)
+        if end is not None
+        else a.startswith(prefix, start)
+        for a in x
+    ]
 
 
 def endswith(x, suffix, start=0, end=None):
-    return [a.endswith(suffix, start, end) if end is not None
-            else a.endswith(suffix, start) for a in x]
+    return [
+        a.endswith(suffix, start, end) if end is not None else a.endswith(suffix, start)
+        for a in x
+    ]
 
 
 def count(x, sub, start=0, end=None):
-    return [a.count(sub, start, end) if end is not None
-            else a.count(sub, start) for a in x]
+    return [
+        a.count(sub, start, end) if end is not None else a.count(sub, start) for a in x
+    ]
 
 
 def find(x, sub, start=0, end=None):
-    return [a.find(sub, start, end) if end is not None
-            else a.find(sub, start) for a in x]
+    return [
+        a.find(sub, start, end) if end is not None else a.find(sub, start) for a in x
+    ]
 
 
 def rfind(x, sub, start=0, end=None):
-    return [a.rfind(sub, start, end) if end is not None
-            else a.rfind(sub, start) for a in x]
+    return [
+        a.rfind(sub, start, end) if end is not None else a.rfind(sub, start) for a in x
+    ]
 
 
 def index(x, sub, start=0, end=None):
-    return [a.index(sub, start, end) if end is not None
-            else a.index(sub, start) for a in x]
+    return [
+        a.index(sub, start, end) if end is not None else a.index(sub, start) for a in x
+    ]
 
 
 def rindex(x, sub, start=0, end=None):
-    return [a.rindex(sub, start, end) if end is not None
-            else a.rindex(sub, start) for a in x]
+    return [
+        a.rindex(sub, start, end) if end is not None else a.rindex(sub, start)
+        for a in x
+    ]
 
 
 def isalpha(x):
@@ -254,8 +266,16 @@ class chararray(list):
     element-wise string operations declared above as methods.
     """
 
-    def __new__(cls, shape, itemsize=1, unicode=True, buffer=None,
-                offset=0, strides=None, order=None):
+    def __new__(
+        cls,
+        shape,
+        itemsize=1,
+        unicode=True,
+        buffer=None,
+        offset=0,
+        strides=None,
+        order=None,
+    ):
         _ = (itemsize, unicode, buffer, offset, strides, order)
         if isinstance(shape, int):
             n = shape
@@ -265,8 +285,16 @@ class chararray(list):
                 n *= d
         return list.__new__(cls)
 
-    def __init__(self, shape, itemsize=1, unicode=True, buffer=None,
-                 offset=0, strides=None, order=None):
+    def __init__(
+        self,
+        shape,
+        itemsize=1,
+        unicode=True,
+        buffer=None,
+        offset=0,
+        strides=None,
+        order=None,
+    ):
         _ = (itemsize, unicode, buffer, offset, strides, order)
         if isinstance(shape, int):
             n = shape
@@ -278,18 +306,57 @@ class chararray(list):
 
 
 __all__ = [
-    "add", "multiply", "mod",
-    "capitalize", "title", "upper", "lower", "swapcase",
-    "strip", "lstrip", "rstrip",
-    "split", "rsplit", "splitlines", "join", "replace",
-    "startswith", "endswith",
-    "count", "find", "rfind", "index", "rindex",
-    "isalnum", "isalpha", "isdigit", "isspace", "isupper", "islower",
-    "isnumeric", "isdecimal", "istitle",
-    "str_len", "encode", "decode",
-    "zfill", "center", "ljust", "rjust", "expandtabs",
-    "equal", "not_equal", "greater", "greater_equal", "less", "less_equal",
+    "add",
+    "multiply",
+    "mod",
+    "capitalize",
+    "title",
+    "upper",
+    "lower",
+    "swapcase",
+    "strip",
+    "lstrip",
+    "rstrip",
+    "split",
+    "rsplit",
+    "splitlines",
+    "join",
+    "replace",
+    "startswith",
+    "endswith",
+    "count",
+    "find",
+    "rfind",
+    "index",
+    "rindex",
+    "isalnum",
+    "isalpha",
+    "isdigit",
+    "isspace",
+    "isupper",
+    "islower",
+    "isnumeric",
+    "isdecimal",
+    "istitle",
+    "str_len",
+    "encode",
+    "decode",
+    "zfill",
+    "center",
+    "ljust",
+    "rjust",
+    "expandtabs",
+    "equal",
+    "not_equal",
+    "greater",
+    "greater_equal",
+    "less",
+    "less_equal",
     "compare_chararrays",
-    "partition", "rpartition", "translate",
-    "array", "asarray", "chararray",
+    "partition",
+    "rpartition",
+    "translate",
+    "array",
+    "asarray",
+    "chararray",
 ]

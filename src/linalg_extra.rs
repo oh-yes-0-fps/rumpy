@@ -5,15 +5,9 @@ use crate::dtype::{ArraysD, DType};
 use ndarray::{ArrayD, Axis, IxDyn};
 use rustpython_vm::{PyResult, VirtualMachine};
 
-fn as_f64_2d(
-    a: &ArraysD,
-    vm: &VirtualMachine,
-) -> PyResult<ndarray::Array2<f64>> {
+fn as_f64_2d(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ndarray::Array2<f64>> {
     if a.ndim() != 2 {
-        return Err(vm.new_value_error(format!(
-            "expected 2-D array, got {}-D",
-            a.ndim()
-        )));
+        return Err(vm.new_value_error(format!("expected 2-D array, got {}-D", a.ndim())));
     }
     use crate::dtype::CoerceArray as _CA;
     let arr = a.coerce::<f64>();
@@ -114,9 +108,7 @@ pub fn norm(
             let ni = normalize_axis(i, nd, vm)?;
             let nj = normalize_axis(j, nd, vm)?;
             if ni == nj {
-                return Err(vm.new_value_error(
-                    "norm: duplicate axes for matrix norm".to_string(),
-                ));
+                return Err(vm.new_value_error("norm: duplicate axes for matrix norm".to_string()));
             }
             AxesSpec::Matrix(ni, nj)
         }
@@ -173,9 +165,7 @@ fn vector_norm(v: &[f64], ord: Option<NormOrd>, vm: &VirtualMachine) -> PyResult
         Some(NormOrd::PosInf) => return Ok(v.iter().fold(0.0_f64, |a, &x| a.max(x.abs()))),
         Some(NormOrd::NegInf) => return Ok(v.iter().fold(f64::INFINITY, |a, &x| a.min(x.abs()))),
         Some(NormOrd::Nuc) => {
-            return Err(vm.new_value_error(
-                "norm: 'nuc' ord requires a 2-D matrix".to_string(),
-            ));
+            return Err(vm.new_value_error("norm: 'nuc' ord requires a 2-D matrix".to_string()));
         }
         Some(NormOrd::Num(p)) => Some(p),
     };
@@ -214,9 +204,9 @@ fn matrix_norm_over(
 ) -> PyResult<ArrayD<f64>> {
     let nd = arr.ndim();
     if nd < 2 {
-        return Err(vm.new_value_error(
-            "norm: matrix axes require at least a 2-D array".to_string(),
-        ));
+        return Err(
+            vm.new_value_error("norm: matrix axes require at least a 2-D array".to_string())
+        );
     }
     // Materialize the result for each combination of the non-{i,j} axes.
     let outer_axes: Vec<usize> = (0..nd).filter(|&k| k != i && k != j).collect();
@@ -345,9 +335,7 @@ fn matrix_norm_2d(
             let sv = singular_values(data, rows, cols, vm)?;
             Ok(sv.into_iter().sum())
         }
-        Some(NormOrd::Num(p)) => Err(vm.new_value_error(format!(
-            "invalid matrix norm order: {p}"
-        ))),
+        Some(NormOrd::Num(p)) => Err(vm.new_value_error(format!("invalid matrix norm order: {p}"))),
     }
 }
 
@@ -414,19 +402,19 @@ pub fn solve(a: &ArraysD, b: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD>
             1 => {
                 let n = arr.len();
                 if n != r {
-                    return Err(vm.new_value_error(format!(
-                        "solve: A rows ({r}) != b rows ({n})"
-                    )));
+                    return Err(vm.new_value_error(format!("solve: A rows ({r}) != b rows ({n})")));
                 }
                 (faer::Mat::<f64>::from_fn(n, 1, |i, _| arr[i]), true)
             }
             2 => {
-                let arr2 = arr.into_dimensionality::<ndarray::Ix2>()
+                let arr2 = arr
+                    .into_dimensionality::<ndarray::Ix2>()
                     .map_err(|e| crate::internal::internal(vm, format!("solve: {e}")))?;
                 if arr2.dim().0 != r {
                     return Err(vm.new_value_error(format!(
                         "solve: A rows ({}) != b rows ({})",
-                        r, arr2.dim().0
+                        r,
+                        arr2.dim().0
                     )));
                 }
                 (nd_to_faer(&arr2), false)
@@ -443,7 +431,9 @@ pub fn solve(a: &ArraysD, b: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD>
     if was_1d {
         let n = x.nrows();
         let v: Vec<f64> = (0..n).map(|i| x[(i, 0)]).collect();
-        Ok(ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default()))
+        Ok(ArraysD::F64(
+            ArrayD::from_shape_vec(IxDyn(&[n]), v).unwrap_or_default(),
+        ))
     } else {
         Ok(ArraysD::F64(faer_to_nd(x.as_ref()).into_dyn()))
     }
@@ -463,7 +453,8 @@ fn svd_rank(m: &ndarray::Array2<f64>, vm: &VirtualMachine) -> PyResult<usize> {
         return Ok(0);
     }
     let mat = nd_to_faer(m);
-    let svd = mat.thin_svd()
+    let svd = mat
+        .thin_svd()
         .map_err(|e| vm.new_value_error(format!("matrix_rank svd failed: {e:?}")))?;
     let s = svd.S().column_vector();
     let k = s.nrows();
@@ -496,7 +487,8 @@ pub fn cholesky(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     }
     let n = r;
     let mat = nd_to_faer(&m);
-    let llt = mat.llt(faer::Side::Lower)
+    let llt = mat
+        .llt(faer::Side::Lower)
         .map_err(|_| vm.new_value_error("cholesky: matrix is not positive-definite".to_string()))?;
     // faer's L() is lower-triangular but may not zero the strict upper part —
     // numpy expects a strictly-lower-triangular layout.
@@ -568,7 +560,10 @@ pub fn qr(a: &ArraysD, mode: QrMode, vm: &VirtualMachine) -> PyResult<(ArraysD, 
             (ndarray::Array2::<f64>::zeros((0, 0)), r_red)
         }
     };
-    Ok((ArraysD::F64(q_out.into_dyn()), ArraysD::F64(r_out.into_dyn())))
+    Ok((
+        ArraysD::F64(q_out.into_dyn()),
+        ArraysD::F64(r_out.into_dyn()),
+    ))
 }
 
 /// numpy.linalg.lstsq returns this tuple. `residuals` is empty when the
@@ -584,16 +579,13 @@ pub struct LstsqResult {
 /// `numpy.linalg.lstsq(A, b)` — least-squares solution via faer's SVD-backed
 /// `solve_lstsq`. The single-array `lstsq` (used internally) returns just
 /// the solution; the tuple form `lstsq_full` returns `(x, residuals, rank, s)`.
-pub fn lstsq_full(
-    a: &ArraysD,
-    b: &ArraysD,
-    vm: &VirtualMachine,
-) -> PyResult<LstsqResult> {
+pub fn lstsq_full(a: &ArraysD, b: &ArraysD, vm: &VirtualMachine) -> PyResult<LstsqResult> {
     let am = as_f64_2d(a, vm)?;
     let (m, n) = am.dim();
     let (b_mat, was_1d) = b_to_faer(b, m, vm)?;
     let mat = nd_to_faer(&am);
-    let svd = mat.thin_svd()
+    let svd = mat
+        .thin_svd()
         .map_err(|e| vm.new_value_error(format!("lstsq svd failed: {e:?}")))?;
     let s = svd.S().column_vector();
     let k = s.nrows();
@@ -627,7 +619,12 @@ pub fn lstsq_full(
     };
     let sv: Vec<f64> = (0..k).map(|i| s[i]).collect();
     let singular = ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[k]), sv).unwrap_or_default());
-    Ok(LstsqResult { solution, residuals, rank, singular })
+    Ok(LstsqResult {
+        solution,
+        residuals,
+        rank,
+        singular,
+    })
 }
 
 /// Convert `b` (1-D or 2-D, any numeric dtype) to a `faer::Mat<f64>` shaped
@@ -644,22 +641,26 @@ fn b_to_faer(
             1 => {
                 let n = arr.len();
                 if n != expected_rows {
-                    return Err(vm.new_value_error(format!(
-                        "A rows ({expected_rows}) != b rows ({n})"
-                    )));
+                    return Err(
+                        vm.new_value_error(format!("A rows ({expected_rows}) != b rows ({n})"))
+                    );
                 }
                 Ok((faer::Mat::<f64>::from_fn(n, 1, |i, _| arr[i]), true))
             }
             2 => {
-                let arr2 = arr.into_dimensionality::<ndarray::Ix2>()
+                let arr2 = arr
+                    .into_dimensionality::<ndarray::Ix2>()
                     .map_err(|e| crate::internal::internal(vm, format!("b_to_faer: {e}")))?;
                 let (br, bc) = arr2.dim();
                 if br != expected_rows {
-                    return Err(vm.new_value_error(format!(
-                        "A rows ({expected_rows}) != b rows ({br})"
-                    )));
+                    return Err(
+                        vm.new_value_error(format!("A rows ({expected_rows}) != b rows ({br})"))
+                    );
                 }
-                Ok((faer::Mat::<f64>::from_fn(br, bc, |i, j| arr2[(i, j)]), false))
+                Ok((
+                    faer::Mat::<f64>::from_fn(br, bc, |i, j| arr2[(i, j)]),
+                    false,
+                ))
             }
             _ => Err(vm.new_value_error("b must be 1-D or 2-D".to_string())),
         },
@@ -693,7 +694,8 @@ pub fn lstsq(a: &ArraysD, b: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD>
     let (m, n) = am.dim();
     let (b_mat, was_1d) = b_to_faer(b, m, vm)?;
     let mat = nd_to_faer(&am);
-    let svd = mat.thin_svd()
+    let svd = mat
+        .thin_svd()
         .map_err(|e| vm.new_value_error(format!("lstsq svd failed: {e:?}")))?;
     let x = svd.solve_lstsq(&b_mat);
     Ok(faer_x_to_arraysd(&x, n, was_1d))
@@ -703,7 +705,8 @@ pub fn lstsq(a: &ArraysD, b: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD>
 pub fn pinv(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let am = as_f64_2d(a, vm)?;
     let mat = nd_to_faer(&am);
-    let svd = mat.thin_svd()
+    let svd = mat
+        .thin_svd()
         .map_err(|e| vm.new_value_error(format!("pinv svd failed: {e:?}")))?;
     let p = svd.pseudoinverse();
     Ok(ArraysD::F64(faer_to_nd(p.as_ref()).into_dyn()))
@@ -726,7 +729,8 @@ pub fn eigh(a: &ArraysD, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)> {
     }
     let n = r;
     let mat = nd_to_faer(&am);
-    let eig = mat.self_adjoint_eigen(faer::Side::Lower)
+    let eig = mat
+        .self_adjoint_eigen(faer::Side::Lower)
         .map_err(|e| vm.new_value_error(format!("eigh failed: {e:?}")))?;
     let s = eig.S().column_vector();
     let u = eig.U();
@@ -757,7 +761,8 @@ pub fn eig(a: &ArraysD, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)> {
     }
     let n = r;
     let m = faer::Mat::from_fn(n, n, |i, j| am[(i, j)]);
-    let eigen = m.eigen()
+    let eigen = m
+        .eigen()
         .map_err(|e| vm.new_value_error(format!("eig failed: {e:?}")))?;
     let s = eigen.S().column_vector();
     let u = eigen.U();
@@ -817,11 +822,7 @@ pub fn slogdet(a: &ArraysD, vm: &VirtualMachine) -> PyResult<(ArraysD, ArraysD)>
 
 /// `np.linalg.matrix_power(A, n)` — A^n via repeated squaring. For n < 0,
 /// computes inv(A)^|n|. For n == 0 returns the identity.
-pub fn matrix_power(
-    a: &ArraysD,
-    n: isize,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn matrix_power(a: &ArraysD, n: isize, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let m = as_f64_2d(a, vm)?;
     let (r, c) = m.dim();
     if r != c {
@@ -829,17 +830,15 @@ pub fn matrix_power(
     }
     let size = r;
     if n == 0 {
-        return Ok(ArraysD::F64(
-            ndarray::Array2::<f64>::eye(size).into_dyn(),
-        ));
+        return Ok(ArraysD::F64(ndarray::Array2::<f64>::eye(size).into_dyn()));
     }
     let base = if n < 0 {
         // Compute inverse first.
         let inv_arr = inv(a, vm)?;
         match inv_arr {
-            ArraysD::F64(x) => x.into_dimensionality::<ndarray::Ix2>().map_err(|e| {
-                crate::internal::internal(vm, format!("matrix_power inv: {e}"))
-            })?,
+            ArraysD::F64(x) => x
+                .into_dimensionality::<ndarray::Ix2>()
+                .map_err(|e| crate::internal::internal(vm, format!("matrix_power inv: {e}")))?,
             _ => return Err(crate::internal::internal(vm, "matrix_power: inv non-f64")),
         }
     } else {
@@ -918,7 +917,9 @@ pub fn cross(a: &ArraysD, b: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD>
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ];
-    Ok(ArraysD::F64(ArrayD::from_shape_vec(IxDyn(&[3]), out).unwrap_or_default()))
+    Ok(ArraysD::F64(
+        ArrayD::from_shape_vec(IxDyn(&[3]), out).unwrap_or_default(),
+    ))
 }
 
 /// Singular values of a row-major `rows x cols` matrix via faer's thin SVD.
@@ -929,7 +930,8 @@ fn singular_values(
     vm: &VirtualMachine,
 ) -> PyResult<Vec<f64>> {
     let m = faer::Mat::<f64>::from_fn(rows, cols, |r, c| data[r * cols + c]);
-    let svd = m.thin_svd()
+    let svd = m
+        .thin_svd()
         .map_err(|e| vm.new_value_error(format!("svd failed: {e:?}")))?;
     let s = svd.S().column_vector();
     Ok((0..s.nrows()).map(|i| s[i]).collect())

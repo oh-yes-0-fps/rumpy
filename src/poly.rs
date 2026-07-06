@@ -83,12 +83,7 @@ pub fn roots(p: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
 
 /// `numpy.polyfit(x, y, deg)` — least-squares fit of polynomial of given
 /// degree, returned in numpy's descending-power order.
-pub fn polyfit(
-    x: &ArraysD,
-    y: &ArraysD,
-    deg: usize,
-    vm: &VirtualMachine,
-) -> PyResult<ArraysD> {
+pub fn polyfit(x: &ArraysD, y: &ArraysD, deg: usize, vm: &VirtualMachine) -> PyResult<ArraysD> {
     let xv = cast_f64_or_empty(x);
     let yv = cast_f64_or_empty(y);
     if xv.len() != yv.len() {

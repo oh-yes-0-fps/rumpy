@@ -75,9 +75,7 @@ pub fn reduce_multi(
                     )));
                 }
                 if v.contains(&(na as usize)) {
-                    return Err(vm.new_value_error(format!(
-                        "duplicate axis {ax} in reduction"
-                    )));
+                    return Err(vm.new_value_error(format!("duplicate axis {ax} in reduction")));
                 }
                 v.push(na as usize);
             }
@@ -89,8 +87,8 @@ pub fn reduce_multi(
     // a single transient axis after permuting/flattening the target axes
     // together. For now, take the simpler approach: for these ops over more
     // than one axis, flatten the target axes into one before reducing.
-    let multi_mean_like = norm_axes.len() > 1
-        && matches!(op, Reduce::Mean | Reduce::Var(_) | Reduce::Std(_));
+    let multi_mean_like =
+        norm_axes.len() > 1 && matches!(op, Reduce::Mean | Reduce::Var(_) | Reduce::Std(_));
     if multi_mean_like {
         // Move all target axes to the front, then merge them into a single
         // axis, then reduce along that single axis.
@@ -159,7 +157,7 @@ fn transpose_axes(a: &ArraysD, perm: &[usize]) -> ArraysD {
         ArraysD::F64(arr) => per!(F64, arr, f64),
         ArraysD::C64(arr) => per!(C64, arr, crate::dtype::C32),
         ArraysD::C128(arr) => per!(C128, arr, crate::dtype::C64),
-        _ => { a.clone() },
+        _ => a.clone(),
     }
 }
 
@@ -215,18 +213,43 @@ pub fn reduce(
     let nd = widened.ndim() as isize;
     let axis = axis.map(|ax| if ax < 0 { ax + nd } else { ax });
     if let Some(ax) = axis
-        && (ax < 0 || ax >= nd) {
-            return Err(vm.new_value_error(format!("axis {ax} out of range")));
-        }
+        && (ax < 0 || ax >= nd)
+    {
+        return Err(vm.new_value_error(format!("axis {ax} out of range")));
+    }
     Ok(match &widened {
         ArraysD::I64(a) => ArraysD::I64(reduce_int_axis(a, axis.map(|v| v as usize), op)),
         ArraysD::U64(a) => ArraysD::U64(reduce_int_axis(a, axis.map(|v| v as usize), op)),
         // Float min/max paths can keep their dtype.
-        ArraysD::F16(a) => ArraysD::F16(reduce_float_axis(a, axis.map(|v| v as usize), op, f16::ZERO, f16::from_f32(1.0))),
-        ArraysD::F32(a) => ArraysD::F32(reduce_float_axis(a, axis.map(|v| v as usize), op, 0.0, 1.0)),
-        ArraysD::F64(a) => ArraysD::F64(reduce_float_axis(a, axis.map(|v| v as usize), op, 0.0, 1.0)),
-        ArraysD::C64(a) => ArraysD::C64(reduce_complex_axis(a, axis.map(|v| v as usize), op, C32::new(0.0, 0.0), C32::new(1.0, 0.0), vm)?),
-        ArraysD::C128(a) => ArraysD::C128(reduce_complex_axis(a, axis.map(|v| v as usize), op, C64::new(0.0, 0.0), C64::new(1.0, 0.0), vm)?),
+        ArraysD::F16(a) => ArraysD::F16(reduce_float_axis(
+            a,
+            axis.map(|v| v as usize),
+            op,
+            f16::ZERO,
+            f16::from_f32(1.0),
+        )),
+        ArraysD::F32(a) => {
+            ArraysD::F32(reduce_float_axis(a, axis.map(|v| v as usize), op, 0.0, 1.0))
+        }
+        ArraysD::F64(a) => {
+            ArraysD::F64(reduce_float_axis(a, axis.map(|v| v as usize), op, 0.0, 1.0))
+        }
+        ArraysD::C64(a) => ArraysD::C64(reduce_complex_axis(
+            a,
+            axis.map(|v| v as usize),
+            op,
+            C32::new(0.0, 0.0),
+            C32::new(1.0, 0.0),
+            vm,
+        )?),
+        ArraysD::C128(a) => ArraysD::C128(reduce_complex_axis(
+            a,
+            axis.map(|v| v as usize),
+            op,
+            C64::new(0.0, 0.0),
+            C64::new(1.0, 0.0),
+            vm,
+        )?),
         // For min/max of smaller integer types, dtype is kept.
         ArraysD::Bool(a) => ArraysD::Bool(reduce_bool_axis(a, axis.map(|v| v as usize), op)),
         ArraysD::I8(a) => ArraysD::I8(reduce_int_axis(a, axis.map(|v| v as usize), op)),
@@ -235,7 +258,7 @@ pub fn reduce(
         ArraysD::U8(a) => ArraysD::U8(reduce_int_axis(a, axis.map(|v| v as usize), op)),
         ArraysD::U16(a) => ArraysD::U16(reduce_int_axis(a, axis.map(|v| v as usize), op)),
         ArraysD::U32(a) => ArraysD::U32(reduce_int_axis(a, axis.map(|v| v as usize), op)),
-        _ => { return Err(crate::internal::unsupported_dtype(vm, "reduce", a.dtype())) },
+        _ => return Err(crate::internal::unsupported_dtype(vm, "reduce", a.dtype())),
     })
 }
 
@@ -439,10 +462,12 @@ where
                 let s = v.iter().copied().fold(zero, |a, x| a + x);
                 Ok(s / T::from_usize_(v.len()))
             }
-            Reduce::Var(_) | Reduce::Std(_) => Err(vm
-                .new_type_error("var/std not implemented for complex".to_string())),
-            Reduce::Min | Reduce::Max => Err(vm
-                .new_type_error("min/max not defined for complex".to_string())),
+            Reduce::Var(_) | Reduce::Std(_) => {
+                Err(vm.new_type_error("var/std not implemented for complex".to_string()))
+            }
+            Reduce::Min | Reduce::Max => {
+                Err(vm.new_type_error("min/max not defined for complex".to_string()))
+            }
         }
     };
     match axis {
@@ -530,14 +555,10 @@ impl ComplexFromUsize for C64 {
 /// argmin / argmax (always returns the flat index).
 pub fn arg_extremum(a: &ArraysD, want_max: bool, vm: &VirtualMachine) -> PyResult<usize> {
     if a.is_empty() {
-        return Err(vm.new_value_error(
-            "attempt to get arg{min,max} of empty array".to_string(),
-        ));
+        return Err(vm.new_value_error("attempt to get arg{min,max} of empty array".to_string()));
     }
     if matches!(a, ArraysD::C64(_) | ArraysD::C128(_)) {
-        return Err(vm.new_type_error(
-            "argmin/argmax not defined for complex".to_string(),
-        ));
+        return Err(vm.new_type_error("argmin/argmax not defined for complex".to_string()));
     }
     fn scan<T: Copy + PartialOrd>(arr: &ArrayD<T>, want_max: bool) -> Option<usize> {
         // Caller has guaranteed non-empty; the Option<...> here just removes
@@ -585,7 +606,7 @@ pub fn arg_extremum(a: &ArraysD, want_max: bool, vm: &VirtualMachine) -> PyResul
         ArraysD::C64(_) | ArraysD::C128(_) => {
             return Err(internal(vm, "arg_extremum reached complex arm"));
         }
-        _ => { None },
+        _ => None,
     };
     result.or_internal(vm, "arg_extremum: empty after non-empty check")
 }

@@ -27,7 +27,11 @@ pub fn flip(a: &ArraysD, axis: Option<isize>) -> ArraysD {
     }
     let axes: Vec<usize> = match axis {
         None => (0..nd).collect(),
-        Some(ax) => vec![if ax < 0 { (ax + nd as isize) as usize } else { ax as usize }],
+        Some(ax) => vec![if ax < 0 {
+            (ax + nd as isize) as usize
+        } else {
+            ax as usize
+        }],
     };
     let mut out = a.clone();
     for ax in axes {
@@ -78,7 +82,10 @@ fn flip_axis(a: &ArraysD, axis: usize) -> ArraysD {
         // Non-numeric data: same slicing, but the inner array isn't Copy so
         // we use a clone-based variant builder.
         ArraysD::Object(x) => ArraysD::Object(x.slice(si.as_ref()).to_owned()),
-        ArraysD::Str { itemsize_chars, data } => ArraysD::Str {
+        ArraysD::Str {
+            itemsize_chars,
+            data,
+        } => ArraysD::Str {
             itemsize_chars: *itemsize_chars,
             data: data.slice(si.as_ref()).to_owned(),
         },
@@ -168,13 +175,28 @@ pub fn roll(a: &ArraysD, shift: isize, vm: &VirtualMachine) -> PyResult<ArraysD>
             }
             let out: ArraysD = match other {
                 ArraysD::Object(arr) => per_clone!(ArraysD::Object, arr),
-                ArraysD::Str { itemsize_chars, data } => {
+                ArraysD::Str {
+                    itemsize_chars,
+                    data,
+                } => {
                     let n = *itemsize_chars;
-                    per_clone!(|d| ArraysD::Str { itemsize_chars: n, data: d }, data)
+                    per_clone!(
+                        |d| ArraysD::Str {
+                            itemsize_chars: n,
+                            data: d
+                        },
+                        data
+                    )
                 }
                 ArraysD::Bytes { itemsize, data } => {
                     let n = *itemsize;
-                    per_clone!(|d| ArraysD::Bytes { itemsize: n, data: d }, data)
+                    per_clone!(
+                        |d| ArraysD::Bytes {
+                            itemsize: n,
+                            data: d
+                        },
+                        data
+                    )
                 }
                 ArraysD::Datetime64 { unit, data } => {
                     let u = *unit;
@@ -186,7 +208,13 @@ pub fn roll(a: &ArraysD, shift: isize, vm: &VirtualMachine) -> PyResult<ArraysD>
                 }
                 ArraysD::Void { layout, data } => {
                     let l = layout.clone();
-                    per_clone!(|d| ArraysD::Void { layout: l.clone(), data: d }, data)
+                    per_clone!(
+                        |d| ArraysD::Void {
+                            layout: l.clone(),
+                            data: d
+                        },
+                        data
+                    )
                 }
                 _ => other.clone(),
             };
@@ -498,13 +526,16 @@ pub fn bincount(a: &ArraysD, vm: &VirtualMachine) -> PyResult<ArraysD> {
     }
     let f = a.cast(DType::I64);
     let ArraysD::I64(arr) = f else {
-        return Err(crate::internal::internal(vm, "bincount: cast to I64 failed"));
+        return Err(crate::internal::internal(
+            vm,
+            "bincount: cast to I64 failed",
+        ));
     };
     let max = arr.iter().copied().max().unwrap_or(-1);
     if max < 0 {
-        return Err(vm.new_value_error(
-            "bincount: array must not contain negative values".to_string(),
-        ));
+        return Err(
+            vm.new_value_error("bincount: array must not contain negative values".to_string())
+        );
     }
     let n = (max + 1) as usize;
     let mut counts = vec![0i64; n];
@@ -598,7 +629,10 @@ pub fn nanstd(a: &ArraysD, ddof: usize) -> ArraysD {
     }
     let mean = v.iter().sum::<f64>() / n as f64;
     let ss: f64 = v.iter().map(|x| (x - mean).powi(2)).sum();
-    ArraysD::F64(ArrayD::from_elem(IxDyn(&[]), (ss / (n - ddof) as f64).sqrt()))
+    ArraysD::F64(ArrayD::from_elem(
+        IxDyn(&[]),
+        (ss / (n - ddof) as f64).sqrt(),
+    ))
 }
 pub fn nanvar(a: &ArraysD, ddof: usize) -> ArraysD {
     let v = finite_f64(a);
@@ -640,9 +674,7 @@ pub fn searchsorted(a: &ArraysD, v: &ArraysD) -> ArraysD {
             sorted.partition_point(|&t| t < x) as i64
         })
         .collect();
-    ArraysD::I64(
-        ArrayD::from_shape_vec(IxDyn(vf.shape()), result).unwrap_or_default(),
-    )
+    ArraysD::I64(ArrayD::from_shape_vec(IxDyn(vf.shape()), result).unwrap_or_default())
 }
 
 // =====================================================================
@@ -663,10 +695,7 @@ pub fn meshgrid(x: &ArraysD, y: &ArraysD) -> (ArraysD, ArraysD) {
         }
     }
     let out_dt = crate::promote::promote(x.dtype(), y.dtype());
-    (
-        ArraysD::F64(xx).cast(out_dt),
-        ArraysD::F64(yy).cast(out_dt),
-    )
+    (ArraysD::F64(xx).cast(out_dt), ArraysD::F64(yy).cast(out_dt))
 }
 
 // =====================================================================
@@ -791,13 +820,28 @@ pub fn delete(a: &ArraysD, idx: usize, vm: &VirtualMachine) -> PyResult<ArraysD>
             }
             match other {
                 ArraysD::Object(arr) => per_clone!(ArraysD::Object, arr),
-                ArraysD::Str { itemsize_chars, data } => {
+                ArraysD::Str {
+                    itemsize_chars,
+                    data,
+                } => {
                     let n = *itemsize_chars;
-                    per_clone!(|d| ArraysD::Str { itemsize_chars: n, data: d }, data)
+                    per_clone!(
+                        |d| ArraysD::Str {
+                            itemsize_chars: n,
+                            data: d
+                        },
+                        data
+                    )
                 }
                 ArraysD::Bytes { itemsize, data } => {
                     let n = *itemsize;
-                    per_clone!(|d| ArraysD::Bytes { itemsize: n, data: d }, data)
+                    per_clone!(
+                        |d| ArraysD::Bytes {
+                            itemsize: n,
+                            data: d
+                        },
+                        data
+                    )
                 }
                 ArraysD::Datetime64 { unit, data } => {
                     let u = *unit;
@@ -809,7 +853,13 @@ pub fn delete(a: &ArraysD, idx: usize, vm: &VirtualMachine) -> PyResult<ArraysD>
                 }
                 ArraysD::Void { layout, data } => {
                     let l = layout.clone();
-                    per_clone!(|d| ArraysD::Void { layout: l.clone(), data: d }, data)
+                    per_clone!(
+                        |d| ArraysD::Void {
+                            layout: l.clone(),
+                            data: d
+                        },
+                        data
+                    )
                 }
                 _ => other.clone(),
             }

@@ -70,20 +70,29 @@ fn extract_rumpy_value(
         });
     }
     if let Ok(f) = obj.try_float(vm) {
-        return Ok(RumpyResult { shape: None, data: vec![f.to_f64()] });
+        return Ok(RumpyResult {
+            shape: None,
+            data: vec![f.to_f64()],
+        });
     }
     if let Some(t) = obj.downcast_ref::<rustpython_vm::builtins::PyTuple>() {
         let mut data = Vec::with_capacity(t.len());
         for it in t.as_slice() {
             data.push(it.try_float(vm)?.to_f64());
         }
-        return Ok(RumpyResult { shape: Some(vec![data.len()]), data });
+        return Ok(RumpyResult {
+            shape: Some(vec![data.len()]),
+            data,
+        });
     }
     if let Some(l) = obj.downcast_ref::<RpyList>() {
         let mut shape = Vec::new();
         let mut data = Vec::new();
         flatten_pylist(l, &mut shape, &mut data, vm, 0)?;
-        return Ok(RumpyResult { shape: Some(shape), data });
+        return Ok(RumpyResult {
+            shape: Some(shape),
+            data,
+        });
     }
     Err(vm.new_type_error(format!(
         "cannot extract rumpy result of type {}",
@@ -118,7 +127,11 @@ fn run_in_numpy(source: &str) -> NumpyResult {
         let numpy = PyModule::import(py, "numpy")?;
         globals.set_item("numpy", &numpy)?;
         globals.set_item("np", &numpy)?;
-        py.run(&std::ffi::CString::new(source).unwrap(), Some(&globals), None)?;
+        py.run(
+            &std::ffi::CString::new(source).unwrap(),
+            Some(&globals),
+            None,
+        )?;
         let result = globals.get_item("result")?.unwrap();
         let arr = numpy.getattr("asarray")?.call1((result,))?;
         let shape: Vec<usize> = arr.getattr("shape")?.extract()?;

@@ -27,7 +27,8 @@ fn rumpy_run(source: &str) -> Out {
             let code = vm
                 .compile(source, rustpython_vm::compiler::Mode::Exec, "<t>".into())
                 .map_err(|e| format!("compile: {e}"))?;
-            vm.run_code_obj(code, scope.clone()).map_err(|e| pyerr(vm, &e))?;
+            vm.run_code_obj(code, scope.clone())
+                .map_err(|e| pyerr(vm, &e))?;
             let r = scope.globals.get_item("result", vm).expect("set result");
             extract(&r, vm).map_err(|e| pyerr(vm, &e))
         })
@@ -1284,7 +1285,11 @@ result = np.array([a.mean(), a.std()])
 "#,
     );
     assert!(r.data[0].abs() < 0.05, "randn mean off: {}", r.data[0]);
-    assert!((r.data[1] - 1.0).abs() < 0.05, "randn std off: {}", r.data[1]);
+    assert!(
+        (r.data[1] - 1.0).abs() < 0.05,
+        "randn std off: {}",
+        r.data[1]
+    );
 }
 
 #[test]
@@ -2754,10 +2759,7 @@ result = np.lib.stride_tricks.sliding_window_view(a, 3)
 "#,
     );
     assert_eq!(r.shape, vec![3, 3]);
-    assert_eq!(
-        r.data,
-        vec![1.0, 2.0, 3.0, 2.0, 3.0, 4.0, 3.0, 4.0, 5.0]
-    );
+    assert_eq!(r.data, vec![1.0, 2.0, 3.0, 2.0, 3.0, 4.0, 3.0, 4.0, 5.0]);
 }
 
 #[test]
@@ -2832,7 +2834,10 @@ result = np.array([i, j]).astype("float64")
 "#,
     );
     // lower triangle of 3x3: (0,0),(1,0),(1,1),(2,0),(2,1),(2,2)
-    assert_eq!(r.data, vec![0.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 2.0]);
+    assert_eq!(
+        r.data,
+        vec![0.0, 1.0, 1.0, 2.0, 2.0, 2.0, 0.0, 0.0, 1.0, 0.0, 1.0, 2.0]
+    );
 }
 
 #[test]
@@ -2844,7 +2849,10 @@ i, j = np.triu_indices(3)
 result = np.array([i, j]).astype("float64")
 "#,
     );
-    assert_eq!(r.data, vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 0.0, 1.0, 2.0, 1.0, 2.0, 2.0]);
+    assert_eq!(
+        r.data,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 0.0, 1.0, 2.0, 1.0, 2.0, 2.0]
+    );
 }
 
 #[test]
@@ -3064,11 +3072,7 @@ np.copyto(dst, src)
 result = dst
 "#,
     );
-    let expected = vec![
-        1.0, 2.0, 3.0, 4.0,
-        1.0, 2.0, 3.0, 4.0,
-        1.0, 2.0, 3.0, 4.0,
-    ];
+    let expected = vec![1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0];
     assert_eq!(r.data, expected);
 }
 
@@ -3271,7 +3275,10 @@ result = a
 "#,
     );
     // mask True at positions 0,2,4,6,8 → set them cycling -1, -2, -1, -2, -1
-    assert_eq!(r.data, vec![-1.0, 1.0, -2.0, 3.0, -1.0, 5.0, -2.0, 7.0, -1.0, 9.0]);
+    assert_eq!(
+        r.data,
+        vec![-1.0, 1.0, -2.0, 3.0, -1.0, 5.0, -2.0, 7.0, -1.0, 9.0]
+    );
 }
 
 #[test]

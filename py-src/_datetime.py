@@ -28,6 +28,7 @@ class datetime64:
             # Seconds (or units) since epoch.
             try:
                 import datetime as _dt
+
                 dt = _dt.datetime.utcfromtimestamp(float(value))
                 self._iso = dt.isoformat()
             except Exception:
@@ -59,6 +60,7 @@ class datetime64:
     def __sub__(self, other):
         if isinstance(other, datetime64):
             import datetime as _dt
+
             if self._iso is None or other._iso is None:
                 return timedelta64(None)
             a = _dt.datetime.fromisoformat(self._iso)
@@ -66,6 +68,7 @@ class datetime64:
             return timedelta64(int((a - b).total_seconds() * 1_000_000), unit="us")
         if isinstance(other, timedelta64):
             import datetime as _dt
+
             if self._iso is None:
                 return datetime64(None)
             a = _dt.datetime.fromisoformat(self._iso)
@@ -76,6 +79,7 @@ class datetime64:
     def __add__(self, other):
         if isinstance(other, timedelta64):
             import datetime as _dt
+
             if self._iso is None:
                 return datetime64(None)
             a = _dt.datetime.fromisoformat(self._iso)
@@ -94,8 +98,14 @@ class timedelta64:
         if value is None or value == "NaT":
             self._micros = None
         elif isinstance(value, (int, float)):
-            scale = {"us": 1, "ms": 1000, "s": 1_000_000, "m": 60_000_000,
-                     "h": 3_600_000_000, "D": 86_400_000_000}.get(unit, 1)
+            scale = {
+                "us": 1,
+                "ms": 1000,
+                "s": 1_000_000,
+                "m": 60_000_000,
+                "h": 3_600_000_000,
+                "D": 86_400_000_000,
+            }.get(unit, 1)
             self._micros = int(float(value) * scale)
         elif isinstance(value, timedelta64):
             self._micros = value._micros
@@ -164,6 +174,7 @@ def isnat(x):
 
 # Business day helpers ----------------------------------------------------
 
+
 class busdaycalendar:
     """A business-day calendar — wraps a weekmask + list of holiday dates."""
 
@@ -182,6 +193,7 @@ def _is_weekend(iso_str, weekmask="1111100"):
     """Return True if ``iso_str`` is a weekend day per ``weekmask``."""
     try:
         import datetime as _dt
+
         d = _dt.datetime.fromisoformat(iso_str).date()
         # Monday=0, Sunday=6; weekmask: MTWTFSS as "1111100".
         return weekmask[d.weekday()] == "0"
@@ -206,8 +218,15 @@ def is_busday(dates, weekmask="1111100", holidays=None, busdaycal=None, out=None
     return one(dates)
 
 
-def busday_offset(dates, offsets, roll="raise", weekmask="1111100",
-                   holidays=None, busdaycal=None, out=None):
+def busday_offset(
+    dates,
+    offsets,
+    roll="raise",
+    weekmask="1111100",
+    holidays=None,
+    busdaycal=None,
+    out=None,
+):
     """Offset each input by ``offsets`` business days. Best-effort scalar version."""
     _ = (roll, out)
     if busdaycal is not None:
@@ -224,7 +243,10 @@ def busday_offset(dates, offsets, roll="raise", weekmask="1111100",
             n = abs(int(off))
             while n > 0:
                 dt += _dt.timedelta(days=step)
-                if not _is_weekend(dt.isoformat(), weekmask) and dt.isoformat() not in holidays:
+                if (
+                    not _is_weekend(dt.isoformat(), weekmask)
+                    and dt.isoformat() not in holidays
+                ):
                     n -= 1
             return datetime64(dt.isoformat())
         except Exception:
@@ -236,8 +258,9 @@ def busday_offset(dates, offsets, roll="raise", weekmask="1111100",
     return one(dates, offsets)
 
 
-def busday_count(begindates, enddates, weekmask="1111100", holidays=None,
-                  busdaycal=None, out=None):
+def busday_count(
+    begindates, enddates, weekmask="1111100", holidays=None, busdaycal=None, out=None
+):
     """Count business days between two dates (exclusive of enddate)."""
     _ = out
     if busdaycal is not None:

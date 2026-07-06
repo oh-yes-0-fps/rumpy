@@ -37,9 +37,12 @@ pub fn promote(a: DType, b: DType) -> DType {
     // Complex: pick the float width that covers both real parts, then a
     // complex of that width.
     if a.is_complex() || b.is_complex() {
-        let fw = float_width(a).max(float_width(b)).max(complex_real_width(a)).max(complex_real_width(b));
+        let fw = float_width(a)
+            .max(float_width(b))
+            .max(complex_real_width(a))
+            .max(complex_real_width(b));
         return match fw {
-            2 | 4 => DType::C64,   // complex64 has f32 components
+            2 | 4 => DType::C64, // complex64 has f32 components
             _ => DType::C128,
         };
     }
@@ -83,11 +86,7 @@ pub fn promote(a: DType, b: DType) -> DType {
 /// rather than panicking.
 #[inline]
 pub fn promote_many(types: &[DType]) -> DType {
-    types
-        .iter()
-        .copied()
-        .reduce(promote)
-        .unwrap_or(DType::F64)
+    types.iter().copied().reduce(promote).unwrap_or(DType::F64)
 }
 
 // ---------------------------------------------------------------------------

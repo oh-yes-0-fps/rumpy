@@ -8,9 +8,7 @@ that ``from numpy.ctypeslib import ...`` resolves; calling them raises
 
 def _stub(name):
     def _f(*args, **kwargs):
-        raise NotImplementedError(
-            f"numpy.ctypeslib.{name} is not implemented in rumpy"
-        )
+        raise NotImplementedError(f"numpy.ctypeslib.{name} is not implemented in rumpy")
 
     _f.__name__ = name
     return _f
@@ -34,6 +32,7 @@ load_library = _stub("load_library")
 
 try:
     import ctypes as _ctypes_module  # noqa: F401 — re-exported below
+
     ctypes = _ctypes_module
     c_intp = ctypes.c_int64 if hasattr(ctypes, "c_int64") else ctypes.c_long
 except ImportError:
