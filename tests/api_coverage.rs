@@ -90,7 +90,7 @@ fn collect_rumpy_api(paths: &[String]) -> BTreeMap<String, Result<Vec<String>, S
             let scope = vm.new_scope_with_builtins();
             let res = (|| -> Result<Vec<String>, String> {
                 let code = vm
-                    .compile(&src, rustpython_vm::compiler::Mode::Exec, "<cov>".into())
+                    .compile(&src, rustpython_vm::compiler::Mode::Exec, "<cov>")
                     .map_err(|e| format!("compile error: {e}"))?;
                 vm.run_code_obj(code, scope.clone()).map_err(|e| {
                     let mut s = String::new();

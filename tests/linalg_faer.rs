@@ -23,7 +23,7 @@ fn run_in_rumpy(source: &str) -> Vec<f64> {
         .enter(|vm| -> Result<Vec<f64>, String> {
             let scope = vm.new_scope_with_builtins();
             let code = vm
-                .compile(source, rustpython_vm::compiler::Mode::Exec, "<test>".into())
+                .compile(source, rustpython_vm::compiler::Mode::Exec, "<test>")
                 .map_err(|e| format!("compile: {e}"))?;
             vm.run_code_obj(code, scope.clone()).map_err(|e| {
                 let mut s = String::new();

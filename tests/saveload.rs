@@ -34,7 +34,7 @@ fn rumpy_run_str(source: &str) {
         .enter(|vm| -> Result<(), String> {
             let scope = vm.new_scope_with_builtins();
             let code = vm
-                .compile(source, rustpython_vm::compiler::Mode::Exec, "<t>".into())
+                .compile(source, rustpython_vm::compiler::Mode::Exec, "<t>")
                 .map_err(|e| format!("compile: {e}"))?;
             vm.run_code_obj(code, scope.clone())
                 .map_err(|e| pyerr(vm, &e))?;
@@ -57,7 +57,7 @@ result = arr.ravel().tolist()
                 path
             );
             let code = vm
-                .compile(&snippet, rustpython_vm::compiler::Mode::Exec, "<t>".into())
+                .compile(&snippet, rustpython_vm::compiler::Mode::Exec, "<t>")
                 .map_err(|e| format!("compile: {e}"))?;
             vm.run_code_obj(code, scope.clone())
                 .map_err(|e| pyerr(vm, &e))?;
@@ -330,7 +330,7 @@ b_list = d["b"].astype("float64").ravel().tolist()
 "#
             );
             let code = vm
-                .compile(&snip, rustpython_vm::compiler::Mode::Exec, "<t>".into())
+                .compile(&snip, rustpython_vm::compiler::Mode::Exec, "<t>")
                 .map_err(|e| format!("compile: {e}"))?;
             vm.run_code_obj(code, scope.clone())
                 .map_err(|e| pyerr(vm, &e))?;

@@ -27,7 +27,7 @@ where
         .enter(|vm| -> Result<R, String> {
             let scope = vm.new_scope_with_builtins();
             let code = vm
-                .compile(src, rustpython_vm::compiler::Mode::Exec, "<t>".into())
+                .compile(src, rustpython_vm::compiler::Mode::Exec, "<t>")
                 .map_err(|e| format!("compile: {e}"))?;
             vm.run_code_obj(code, scope.clone()).map_err(|e| {
                 let mut s = String::new();
@@ -349,7 +349,7 @@ fn run_expect_error(src: &str) -> String {
     let interp = rumpy_interp();
     interp.enter(|vm| -> String {
         let scope = vm.new_scope_with_builtins();
-        let code = match vm.compile(src, rustpython_vm::compiler::Mode::Exec, "<t>".into()) {
+        let code = match vm.compile(src, rustpython_vm::compiler::Mode::Exec, "<t>") {
             Ok(c) => c,
             Err(e) => return format!("compile: {e}"),
         };
