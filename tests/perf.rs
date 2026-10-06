@@ -24,8 +24,8 @@ a = np.arange(10000.0).reshape(100, 100)
 result = float(a.sum(axis=1).sum())
 "#;
         let code = vm
-            .compile(src, rustpython_vm::compiler::Mode::Exec, "<t>".into())
-            .map_err(|e| vm.new_syntax_error(&e, Some(src)))?;
+            .compile(src, rustpython_vm::compiler::Mode::Exec, "<t>")
+            .map_err(|e| e.into_pyexception(vm, Some(src)))?;
         vm.run_code_obj(code, scope.clone())?;
         let r = scope.globals.get_item("result", vm).unwrap();
         Ok(r.try_float(vm)?.to_f64())
@@ -51,8 +51,8 @@ c = a + b
 result = float(c.sum())
 "#;
         let code = vm
-            .compile(src, rustpython_vm::compiler::Mode::Exec, "<t>".into())
-            .map_err(|e| vm.new_syntax_error(&e, Some(src)))?;
+            .compile(src, rustpython_vm::compiler::Mode::Exec, "<t>")
+            .map_err(|e| e.into_pyexception(vm, Some(src)))?;
         vm.run_code_obj(code, scope.clone())?;
         let r = scope.globals.get_item("result", vm).unwrap();
         Ok(r.try_float(vm)?.to_f64())
@@ -74,8 +74,8 @@ a = np.arange(2500.0).reshape(50, 50)
 result = float(np.cumsum(a, axis=1).sum())
 "#;
         let code = vm
-            .compile(src, rustpython_vm::compiler::Mode::Exec, "<t>".into())
-            .map_err(|e| vm.new_syntax_error(&e, Some(src)))?;
+            .compile(src, rustpython_vm::compiler::Mode::Exec, "<t>")
+            .map_err(|e| e.into_pyexception(vm, Some(src)))?;
         vm.run_code_obj(code, scope.clone())?;
         let r = scope.globals.get_item("result", vm).unwrap();
         Ok(r.try_float(vm)?.to_f64())

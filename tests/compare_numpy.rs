@@ -26,7 +26,7 @@ fn run_in_rumpy(source: &str) -> RumpyResult {
     let outcome = interp.enter(|vm| -> Result<RumpyResult, String> {
         let scope = vm.new_scope_with_builtins();
         let code = vm
-            .compile(source, rustpython_vm::compiler::Mode::Exec, "<test>".into())
+            .compile(source, rustpython_vm::compiler::Mode::Exec, "<test>")
             .map_err(|e| format!("compile error: {e}"))?;
         vm.run_code_obj(code, scope.clone())
             .map_err(|e| py_err_string(vm, &e))?;

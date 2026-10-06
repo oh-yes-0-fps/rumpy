@@ -33,11 +33,7 @@ fn run(source: &str) {
         }
         let scope = vm.new_scope_with_builtins();
         let code = vm
-            .compile(
-                source,
-                rustpython_vm::compiler::Mode::Exec,
-                "<niche>".into(),
-            )
+            .compile(source, rustpython_vm::compiler::Mode::Exec, "<niche>")
             .expect("compile");
         if let Err(e) = vm.run_code_obj(code, scope) {
             let mut s = String::new();
